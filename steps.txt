@@ -1,0 +1,20 @@
+STEP 1  → Project structure             
+STEP 2  → requirements + environment
+STEP 3  → Groq LLM
+STEP 4  → OpenRouter fallback
+STEP 5  → Gemini fallback
+STEP 6  → OpenAI fallback
+STEP 7  → Perception
+STEP 8  → Memory
+STEP 9  → Planner
+STEP 10 → Tools
+STEP 11 → Tool calling
+STEP 12 → Travel Agent
+STEP 13 → RAG + Pinecone
+STEP 14 → Database
+STEP 15 → Mock booking
+STEP 16 → Real APIs
+STEP 17 → FastAPI
+STEP 18 → Authentication
+STEP 19 → Multi-tenancy
+STEP 20 → SaaS deployment
