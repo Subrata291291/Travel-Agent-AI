@@ -1,0 +1,166 @@
+﻿Travel-agent
+├── app
+│   ├── agents
+│   │   ├── __init__.py
+│   │   ├── executor.py
+│   │   ├── graph.py
+│   │   ├── perception.py
+│   │   ├── planner.py
+│   │   └── travel_agent.py
+│   ├── api
+│   │   ├── routes
+│   │   │   ├── __init__.py
+│   │   │   ├── bookings.py
+│   │   │   ├── chat.py
+│   │   │   ├── destinations.py
+│   │   │   ├── flights.py
+│   │   │   ├── hotels.py
+│   │   │   ├── restaurants.py
+│   │   │   └── trips.py
+│   │   ├── __init__.py
+│   │   └── dependencies.py
+│   ├── config
+│   │   ├── __init__.py
+│   │   ├── model_config.py
+│   │   ├── settings.py
+│   │   └── tool_config.py
+│   ├── database
+│   │   ├── migrations
+│   │   │   └── .gitkeep
+│   │   ├── __init__.py
+│   │   ├── connection.py
+│   │   ├── models.py
+│   │   └── repositories.py
+│   ├── llm
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── exceptions.py
+│   │   ├── gemini.py
+│   │   ├── groq.py
+│   │   ├── openai.py
+│   │   ├── openrouter.py
+│   │   └── router.py
+│   ├── memory
+│   │   ├── __init__.py
+│   │   ├── conversation.py
+│   │   ├── long_term.py
+│   │   ├── preferences.py
+│   │   └── short_term.py
+│   ├── prompts
+│   │   ├── booking.yaml
+│   │   ├── perception.yaml
+│   │   ├── planner.yaml
+│   │   ├── recommendation.yaml
+│   │   └── travel_agent.yaml
+│   ├── rag
+│   │   ├── __init__.py
+│   │   ├── document_loader.py
+│   │   ├── embeddings.py
+│   │   ├── ingestion.py
+│   │   ├── reranker.py
+│   │   ├── retriever.py
+│   │   └── vector_store.py
+│   ├── schemas
+│   │   ├── __init__.py
+│   │   ├── booking.py
+│   │   ├── bus.py
+│   │   ├── common.py
+│   │   ├── destination.py
+│   │   ├── flight.py
+│   │   ├── hotel.py
+│   │   ├── perception.py
+│   │   ├── restaurant.py
+│   │   ├── tool.py
+│   │   ├── train.py
+│   │   ├── transport.py
+│   │   ├── trip.py
+│   │   └── user.py
+│   ├── services
+│   │   ├── __init__.py
+│   │   ├── booking_service.py
+│   │   ├── flight_service.py
+│   │   ├── hotel_service.py
+│   │   ├── restaurant_service.py
+│   │   ├── trip_service.py
+│   │   └── user_service.py
+│   ├── tools
+│   │   ├── __init__.py
+│   │   ├── availability.py
+│   │   ├── booking.py
+│   │   ├── buses.py
+│   │   ├── destination_resolver.py
+│   │   ├── destinations.py
+│   │   ├── flights.py
+│   │   ├── geocoding.py
+│   │   ├── hotels.py
+│   │   ├── restaurants.py
+│   │   ├── trains.py
+│   │   ├── transport.py
+│   │   └── weather.py
+│   ├── utils
+│   │   ├── __init__.py
+│   │   ├── helpers.py
+│   │   ├── logging.py
+│   │   ├── retry.py
+│   │   └── validation.py
+│   ├── __init__.py
+│   └── main.py
+├── data
+│   ├── knowledge
+│   │   └── .gitkeep
+│   ├── processed
+│   │   └── .gitkeep
+│   └── raw
+│       └── .gitkeep
+├── logs
+│   └── .gitkeep
+├── notebooks
+│   ├── 01_llm_basics.ipynb
+│   ├── 02_perception.ipynb
+│   ├── 03_memory.ipynb
+│   ├── 04_planning.ipynb
+│   ├── 05_tools.ipynb
+│   ├── 06_tool_calling.ipynb
+│   └── 07_travel_agent.ipynb
+├── scripts
+│   ├── __init__.py
+│   ├── health_check.py
+│   ├── ingest_travel_data.py
+│   ├── seed_database.py
+│   ├── test_agent_loop.py
+│   ├── test_conversation_memory.py
+│   ├── test_destination_resolver.py
+│   ├── test_executor.py
+│   ├── test_geocoding.py
+│   ├── test_graceful_failure.py
+│   ├── test_langgraph.py
+│   ├── test_langgraph_failure.py
+│   ├── test_llm_providers.py
+│   ├── test_memory.py
+│   ├── test_memory_planner.py
+│   ├── test_perception.py
+│   ├── test_planner.py
+│   ├── test_preferences.py
+│   ├── test_retry.py
+│   ├── test_tool_calling.py
+│   └── test_weather.py
+├── tests
+│   ├── integration
+│   │   ├── test_api.py
+│   │   ├── test_booking_flow.py
+│   │   └── test_travel_agent.py
+│   ├── unit
+│   │   ├── test_llm_router.py
+│   │   ├── test_memory.py
+│   │   ├── test_perception.py
+│   │   ├── test_planner.py
+│   │   └── test_tools.py
+│   └── __init__.py
+├── .env
+├── .env.example
+├── .gitignore
+├── project_structure.txt
+├── README.md
+├── requirements.txt
+├── run.py
+└── steps.txt

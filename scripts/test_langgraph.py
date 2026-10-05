@@ -57,8 +57,9 @@ def main():
 
     result_1 = agent.run(
         user_message=(
-            "What is the current weather "
-            "in Manali?"
+            "I want to travel from Kolkata to Manali on "
+            "December 20, 2026 for 2 travellers. "
+            "Show me flight, train, and bus options."
         ),
         user_id=user_id,
         session_id=session_id,

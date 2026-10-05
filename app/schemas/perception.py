@@ -53,12 +53,32 @@ class TripPerception(BaseModel):
         description="Maximum or approximate trip budget."
     )
 
-    currency: str = Field(
+    currency: Optional[str] = Field(
         default="INR",
         description="Currency of the budget."
     )
 
-    preferences: List[str] = Field(
+    preferences: Optional[List[str]] = Field(
         default_factory=list,
         description="Travel preferences, constraints, likes and dislikes."
+    )
+
+    transport_mode: Literal[
+        "flight",
+        "train",
+        "bus",
+        "any",
+        "unknown",
+    ] = Field(
+        default="unknown",
+        description=(
+            "Preferred transportation mode. "
+            "Use 'flight' for flights, "
+            "'train' for trains, "
+            "'bus' for buses, "
+            "'any' when the user wants to compare "
+            "all transportation modes, "
+            "and 'unknown' when no transportation mode "
+            "has been specified."
+        ),
     )

@@ -100,7 +100,33 @@ RULES:
     - add the question to clarification_questions
     - create the clarification task first.
 
-18. For "check_weather" requests:
+18. For transportation planning:
+    - If transport_mode is "flight",
+      create a transport task specifically
+      for flight options.
+
+    - If transport_mode is "train",
+      create a transport task specifically
+      for train options.
+
+    - If transport_mode is "bus",
+      create a transport task specifically
+      for bus options.
+
+    - If transport_mode is "any",
+      create a transport task that considers
+      flight, train, and bus options.
+
+    - If transport_mode is "unknown",
+      do not assume a transportation mode.
+      Create a general transport task only when
+      transportation planning is relevant to
+      the user's request.
+
+    - Never assume flight, train, or bus when
+      transport_mode is "unknown".
+
+19. For "check_weather" requests:
     - If the user asks for current weather,
       do NOT ask for travel dates.
     - If the user asks about weather during

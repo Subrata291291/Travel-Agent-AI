@@ -11,9 +11,8 @@ def main():
     planner_agent = PlannerAgent(router)
 
     user_message = """
-    আমি আর আমার wife December 20-এর দিকে Manali যেতে চাই
-    4 দিনের জন্য। আমার wife vegetarian এবং আমি long bus
-    journey নিতে পারি না। আমাদের budget প্রায় 30,000 টাকা।
+    I want to travel from Kolkata to Manali on December 20, 2026
+for 2 travellers. Show me flight, train, and bus options.
     """
 
     # Step 1: Understand the user

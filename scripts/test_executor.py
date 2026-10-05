@@ -16,19 +16,22 @@ def main():
     )
 
     messages = [
-        (
-            "system",
-            """
-            You are a helpful travel assistant.
+    (
+        "system",
+        """
+        You are a helpful travel assistant.
 
-            Use available tools whenever necessary.
-            """
-        ),
-        (
-            "human",
-            "What is the current weather in Manali?"
-        ),
-    ]
+        Use available tools whenever necessary.
+
+        When the user asks for bus options,
+        use the search_buses tool.
+        """
+    ),
+    (
+        "human",
+        "Find bus options from Kolkata to Manali for December 20, 2026 for 2 travellers."
+    ),
+]
 
     # -------------------------
     # LLM decides tool

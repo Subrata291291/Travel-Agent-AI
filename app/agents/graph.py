@@ -898,7 +898,7 @@ unsupported information.
                 else None
             ),
             preferences=(
-                perception.preferences
+                perception.preferences or []
                 if perception
                 else []
             ),
