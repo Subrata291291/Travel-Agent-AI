@@ -1,3 +1,5 @@
+import json
+
 from langchain_core.messages import ToolMessage
 
 from app.tools import get_tool
@@ -26,8 +28,27 @@ class ToolExecutor:
                 tool_args,
             )
 
+            # -------------------------------------------------
+            # Serialize structured tool results
+            # -------------------------------------------------
+            if isinstance(result, list):
+                content = json.dumps(
+                    [
+                        item.model_dump()
+                        if hasattr(item, "model_dump")
+                        else item
+                        for item in result
+                    ]
+                )
+            elif hasattr(result, "model_dump"):
+                content = json.dumps(
+                    result.model_dump()
+                )
+            else:
+                content = str(result)
+
             return ToolMessage(
-                content=str(result),
+                content=content,
                 tool_call_id=tool_call_id,
             )
 

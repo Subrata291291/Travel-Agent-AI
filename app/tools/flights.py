@@ -23,6 +23,7 @@ def search_flights(
     departure = datetime.fromisoformat(
         f"{departure_date}T09:00:00"
     )
+    
 
     arrival = departure + timedelta(minutes=150)
 
@@ -37,5 +38,6 @@ def search_flights(
             duration_minutes=150,
             price=6500.0 * travellers,
             currency="INR",
+            option_id="FLIGHT-1",
         )
     ]

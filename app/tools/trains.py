@@ -39,5 +39,6 @@ def search_trains(
             duration_minutes=1200,
             price=2100.0 * travellers,
             currency="INR",
+            option_id="TRAIN-1",
         )
     ]

@@ -37,5 +37,6 @@ def search_buses(
             duration_minutes=1440,
             price=1800.0 * travellers,
             currency="INR",
+            option_id="BUS-1",
         )
     ]

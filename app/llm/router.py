@@ -183,3 +183,147 @@ class LLMRouter:
             "No LLM provider is available for structured output. "
             f"Errors: {errors}"
         )
+
+    def invoke_with_tools(self, messages, tools):
+        """
+        Try each configured LLM provider with tool calling.
+
+        If the current provider fails, for example because of
+        rate limits (429), authentication problems, or temporary
+        provider errors, automatically try the next provider.
+        """
+
+        errors = []
+
+        for provider_name in self.provider_order:
+            try:
+                logger.info(
+                    "Trying tool-enabled LLM provider: %s",
+                    provider_name,
+                )
+
+                llm = self.get_llm(provider_name)
+
+                # Attach the tools to the current provider.
+                tool_enabled_llm = llm.bind_tools(tools)
+
+                # Invoke the current provider.
+                response = tool_enabled_llm.invoke(messages)
+
+                logger.info(
+                    "Tool-enabled LLM provider succeeded: %s",
+                    provider_name,
+                )
+
+                return response
+
+            except LLMConfigurationError as error:
+                logger.warning(
+                    "Skipping %s: %s",
+                    provider_name,
+                    error,
+                )
+
+                errors.append(
+                    f"{provider_name}: not configured"
+                )
+
+                continue
+
+            except Exception as error:
+                classified_error = self._classify_error(error)
+
+                logger.warning(
+                    "Tool-enabled provider %s failed: %s",
+                    provider_name,
+                    classified_error,
+                )
+
+                errors.append(
+                    f"{provider_name}: "
+                    f"{type(classified_error).__name__}"
+                )
+
+                continue
+
+        raise RuntimeError(
+            "All configured tool-enabled LLM providers failed. "
+            f"Errors: {errors}"
+        )
+
+    def invoke_structured(self, prompt, schema):
+        """
+        Invoke a structured-output LLM with automatic provider fallback.
+
+        This method is used when the application needs the LLM
+        to return data matching a Pydantic schema.
+
+        Example:
+            TripPerception
+
+        If one provider fails because of authentication,
+        rate limiting, temporary errors, or another provider
+        failure, the next configured provider is tried.
+        """
+
+        errors = []
+
+        for provider_name in self.provider_order:
+            try:
+                logger.info(
+                    "Trying structured LLM provider: %s",
+                    provider_name,
+                )
+
+                # Create the current provider.
+                llm = self.get_llm(provider_name)
+
+                # Convert the LLM into a structured-output LLM.
+                structured_llm = llm.with_structured_output(
+                    schema,
+                    method="json_mode",
+                )
+
+                # Invoke the structured model.
+                response = structured_llm.invoke(prompt)
+
+                logger.info(
+                    "Structured LLM provider succeeded: %s",
+                    provider_name,
+                )
+
+                return response
+
+            except LLMConfigurationError as error:
+                logger.warning(
+                    "Skipping %s: %s",
+                    provider_name,
+                    error,
+                )
+
+                errors.append(
+                    f"{provider_name}: not configured"
+                )
+
+                continue
+
+            except Exception as error:
+                classified_error = self._classify_error(error)
+
+                logger.warning(
+                    "Structured provider %s failed: %s",
+                    provider_name,
+                    classified_error,
+                )
+
+                errors.append(
+                    f"{provider_name}: "
+                    f"{type(classified_error).__name__}"
+                )
+
+                continue
+
+        raise RuntimeError(
+            "All configured structured LLM providers failed. "
+            f"Errors: {errors}"
+        )
