@@ -33,13 +33,28 @@ class WeatherTool:
         timezone: str | None = None,
         country: str | None = None,
         admin1: str | None = None,
+        resolved_destination: dict | None = None,
     ) -> dict:
 
         # -------------------------
         # Step 1: Resolve location
         # -------------------------
 
-        if latitude is None or longitude is None:
+                # -------------------------
+        # Step 1: Resolve location
+        # -------------------------
+
+        if resolved_destination:
+
+            latitude = resolved_destination["latitude"]
+            longitude = resolved_destination["longitude"]
+
+            location_name = resolved_destination["name"]
+            country_name = resolved_destination["country"]
+            admin1_name = resolved_destination["admin1"]
+            location_timezone = resolved_destination["timezone"]
+
+        elif latitude is None or longitude is None:
 
             if not location:
                 raise ValueError(
@@ -79,7 +94,7 @@ class WeatherTool:
                 "wind_speed_10m"
             ),
             "wind_speed_unit": "kmh",
-            "timezone": "auto",
+            "timezone": location_timezone or "auto",
         }
 
         response = requests.get(
@@ -107,6 +122,7 @@ class WeatherTool:
                 "timezone": location_timezone,
             },
             "current": data["current"],
+            "units": data.get("current_units", {}),
         }
 
 weather_service = WeatherTool()
@@ -120,6 +136,7 @@ def get_weather(
     timezone: str | None = None,
     country: str | None = None,
     admin1: str | None = None,
+    resolved_destination: dict | None = None,
 ) -> dict:
     """
     Get current weather for a travel destination.
@@ -136,4 +153,5 @@ def get_weather(
         timezone=timezone,
         country=country,
         admin1=admin1,
+        resolved_destination=resolved_destination,
     )

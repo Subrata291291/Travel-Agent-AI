@@ -24,7 +24,7 @@ from app.tools import get_all_tools
 from app.tools.destination_resolver import (
     DestinationResolver,
 )
-
+from app.schemas.tool import ToolContext
 
 # ============================================================
 # STATE
@@ -42,7 +42,7 @@ class TravelState(TypedDict):
     clarification_needed: bool
     pending_clarification: str | None
     pending_destination: str | None
-    tool_context: dict | None
+    tool_context: ToolContext | None
 
 
 # ============================================================
@@ -299,10 +299,19 @@ class TravelAgentGraph:
             and pending_destination
             and destination
         ):
-            destination = (
-                f"{pending_destination}, "
-                f"{destination}"
-            )
+            normalized_destination = destination.strip().lower()
+            normalized_pending = pending_destination.strip().lower()
+
+            if (
+                normalized_destination != normalized_pending
+                and not normalized_destination.startswith(
+                    f"{normalized_pending},"
+                )
+            ):
+                destination = (
+                    f"{pending_destination}, "
+                    f"{destination}"
+                )
 
         # ----------------------------------------------------
         # Some requests may not require a destination.
@@ -340,6 +349,7 @@ class TravelAgentGraph:
                 "clarification_needed": False,
                 "pending_clarification": None,
                 "pending_destination": None,
+                "tool_context": None,
             }
 
         return {
@@ -384,50 +394,99 @@ class TravelAgentGraph:
         )
 
         # ----------------------------------------------------
-        # Limit displayed candidates.
-        #
-        # We don't want to show 10+ locations
-        # to the user.
+        # Remove duplicate locations
         # ----------------------------------------------------
 
-        candidates = candidates[:5]
+        unique_candidates = []
+        seen_locations = set()
+
+        for candidate in candidates:
+            name = candidate.get("name")
+            region = candidate.get("admin1")
+            country = candidate.get("country")
+
+            location_key = (
+                name,
+                region,
+                country,
+            )
+
+            if location_key in seen_locations:
+                continue
+
+            seen_locations.add(location_key)
+            unique_candidates.append(candidate)
+
+        # ----------------------------------------------------
+        # Limit displayed candidates
+        # ----------------------------------------------------
+
+        candidates = unique_candidates[:5]
 
         options = []
 
         for candidate in candidates:
+            name = candidate.get("name")
+            region = candidate.get("admin1")
+            country = candidate.get("country")
 
-            name = candidate.get(
-                "name"
-            )
+            parts = []
 
-            region = candidate.get(
-                "admin1"
-            )
+            if name:
+                parts.append(name)
 
-            country = candidate.get(
-                "country"
-            )
+            if region:
+                parts.append(region)
 
-            if region and country:
+            if country:
+                parts.append(country)
 
+            if parts:
                 options.append(
-                    f"{name}, "
-                    f"{region}, "
-                    f"{country}"
+                    ", ".join(parts)
                 )
 
-            elif country:
+        # Remove duplicate display names
+        options = list(
+            dict.fromkeys(options)
+        )
 
-                options.append(
-                    f"{name}, "
-                    f"{country}"
+        # ----------------------------------------------------
+        # Build clarification question
+        # ----------------------------------------------------
+
+        if options:
+
+            question = (
+                "I found multiple places "
+                f"matching '{resolution['location']}'. "
+                "Which one do you mean?\n\n"
+            )
+
+            question += "\n".join(
+                f"{index}. {option}"
+                for index, option in enumerate(
+                    options,
+                    start=1,
                 )
+            )
 
-            else:
+        else:
 
-                options.append(
-                    name
+            question = (
+                "I couldn't uniquely identify "
+                f"'{resolution['location']}'. "
+                "Could you provide the "
+                "region or country?"
+            )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=question
                 )
+            ]
+        }
 
         # ----------------------------------------------------
         # Build clarification question
@@ -553,13 +612,27 @@ GROUNDING RULES:
 9. You may explain information directly provided by a
    tool, but do not introduce new factual claims.
 
-10. Keep the answer concise and useful.
+10. Preserve all units exactly as returned by tools.
+    Do NOT convert, infer, or change measurement units.
 
-11. If the user asks for something that requires a
+11. When a tool returns a measurement with a unit,
+    report the same value with the same unit.
+
+12. Keep the answer concise and useful.
+
+13. If the user asks for something that requires a
     different tool, use that tool rather than guessing.
 
-12. Never claim that you checked information that you
+14. Never claim that you checked information that you
     did not actually retrieve from a tool.
+
+15. If a tool returns a TOOL_ERROR, do not expose the
+    internal error message, exception details, stack traces,
+    or implementation details to the user.
+
+    Instead, clearly state that the requested information
+    could not be retrieved right now and suggest trying again
+    later.
 
 FINAL RESPONSE RULE:
 
@@ -616,18 +689,16 @@ unsupported information.
     def tools_node(self, state: TravelState):
         last_message = state["messages"][-1]
 
-        resolved_destination = self._get_resolved_destination(state)
+        tool_context = self._build_tool_context(state)
 
         tool_messages = []
 
         for tool_call in last_message.tool_calls:
             tool_args = dict(tool_call["args"])
 
-            if resolved_destination:
-                tool_args.update(
-                    {
-                        "resolved_destination": resolved_destination,
-                    }
+            if tool_context.resolved_destination:
+                tool_args["resolved_destination"] = (
+                    tool_context.resolved_destination.model_dump()
                 )
 
             enriched_tool_call = {
@@ -636,11 +707,14 @@ unsupported information.
             }
 
             tool_messages.append(
-                self.tool_executor.execute(enriched_tool_call)
+                self.tool_executor.execute(
+                    enriched_tool_call
+                )
             )
 
         return {
             "messages": tool_messages,
+            "tool_context": tool_context,
         }
 
     # ========================================================
@@ -776,31 +850,56 @@ unsupported information.
             ),
         }
 
-    def _get_resolved_destination(self, state: TravelState) -> dict | None:
+
+    def _build_tool_context(
+        self,
+        state: TravelState,
+    ) -> ToolContext:
         resolution = state.get("destination_resolution")
 
-        if not resolution:
-            return None
+        resolved_destination = None
 
-        if resolution.get("status") != "resolved":
-            return None
+        if (
+            resolution
+            and resolution.get("status") == "resolved"
+            and resolution.get("location")
+        ):
+            resolved_destination = (
+                resolution["location"]
+            )
 
-        return resolution.get("location")
+        perception = state.get("perception")
 
-    def _build_tool_context(self, state: TravelState) -> dict:
-        resolution = state.get("destination_resolution")
-
-        if not resolution:
-            return {}
-
-        if resolution.get("status") != "resolved":
-            return {}
-
-        location = resolution.get("location")
-
-        if not location:
-            return {}
-
-        return {
-            "resolved_destination": location,
-        }
+        return ToolContext(
+            resolved_destination=resolved_destination,
+            start_date=(
+                perception.start_date
+                if perception
+                else None
+            ),
+            end_date=(
+                perception.end_date
+                if perception
+                else None
+            ),
+            travellers=(
+                perception.travellers
+                if perception
+                else None
+            ),
+            budget=(
+                perception.budget
+                if perception
+                else None
+            ),
+            currency=(
+                perception.currency
+                if perception
+                else None
+            ),
+            preferences=(
+                perception.preferences
+                if perception
+                else []
+            ),
+        )
