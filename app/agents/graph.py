@@ -190,6 +190,11 @@ class TravelAgentGraph:
             self.booking_already_exists_node,
         )
 
+        graph.add_node(
+            "get_bookings",
+            self.get_bookings_node,
+        )
+
         # NEW:
         # Executes booking only after explicit confirmation.
         graph.add_node(
@@ -244,6 +249,7 @@ class TravelAgentGraph:
                 "wait_booking": "booking_waiting",
                 "destination": "destination_resolver",
                 "booking_already_exists": "booking_already_exists",
+                "get_bookings": "get_bookings",
             },
         )
 
@@ -338,6 +344,14 @@ class TravelAgentGraph:
         # ----------------------------------------------------
         graph.add_edge(
             "booking_already_exists",
+            END,
+        )
+
+        # ----------------------------------------------------
+        # GET BOOKINGS → END
+        # ----------------------------------------------------
+        graph.add_edge(
+            "get_bookings",
             END,
         )
 
@@ -605,7 +619,15 @@ class TravelAgentGraph:
             return "wait_booking"
 
         # ====================================================
-        # CASE 3 — NEW BOOKING REQUEST
+        # CASE 3 — GET USER BOOKINGS
+        # ====================================================
+
+        if perception.intent == "get_bookings":
+            return "get_bookings"
+
+
+        # ====================================================
+        # CASE 4 — NEW BOOKING REQUEST
         # ====================================================
 
         if (
@@ -614,8 +636,9 @@ class TravelAgentGraph:
         ):
             return "new_booking"
 
+
         # ====================================================
-        # CASE 4 — NORMAL TRAVEL FLOW
+        # CASE 5 — NORMAL TRAVEL FLOW
         # ====================================================
 
         return "destination"
@@ -927,6 +950,101 @@ class TravelAgentGraph:
             ],
             "pending_booking_confirmation": False,
             "selected_option_id": None,
+        }
+
+    def get_bookings_node(
+        self,
+        state: TravelState,
+    ):
+        """
+        Retrieve all bookings belonging to the current user.
+
+        IMPORTANT:
+        - This node does NOT use the LLM to retrieve bookings.
+        - It calls BookingService directly.
+        - The database is the source of truth.
+        """
+
+        # --------------------------------------------------------
+        # Get current user
+        # --------------------------------------------------------
+
+        user_id = state.get("user_id")
+
+        if not user_id:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't determine your user account "
+                            "for retrieving bookings."
+                        )
+                    )
+                ]
+            }
+
+        # --------------------------------------------------------
+        # Retrieve bookings from database
+        # --------------------------------------------------------
+
+        bookings = self.booking_service.get_user_bookings(
+            user_id=user_id
+        )
+
+        # --------------------------------------------------------
+        # No bookings found
+        # --------------------------------------------------------
+
+        if not bookings:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "You don't have any bookings yet."
+                        )
+                    )
+                ]
+            }
+
+        # --------------------------------------------------------
+        # Format bookings
+        # --------------------------------------------------------
+
+        lines = [
+            "Here are your bookings:",
+            "",
+        ]
+
+        for index, booking in enumerate(
+            bookings,
+            start=1,
+        ):
+            lines.extend(
+                [
+                    f"{index}. Booking ID: {booking.booking_id}",
+                    f"   Option: {booking.option_id}",
+                    f"   Mode: {booking.mode}",
+                    f"   Provider: {booking.provider}",
+                    f"   From: {booking.origin}",
+                    f"   To: {booking.destination}",
+                    f"   Travellers: {booking.travellers}",
+                    (
+                        f"   Total: "
+                        f"{booking.total_price} "
+                        f"{booking.currency}"
+                    ),
+                    f"   Status: {booking.status}",
+                    f"   Created: {booking.created_at}",
+                    "",
+                ]
+            )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content="\n".join(lines)
+                )
+            ]
         }
 
     # ========================================================

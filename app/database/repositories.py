@@ -44,3 +44,26 @@ class BookingRepository:
             )
             .order_by(Booking.created_at.desc())
         )
+
+
+    def get_user_bookings(
+        self,
+        user_id: str,
+    ) -> list[Booking]:
+        """
+        Return all bookings belonging to a user.
+
+        Latest bookings are returned first.
+        """
+
+        return list(
+            self.db.scalars(
+                select(Booking)
+                .where(
+                    Booking.user_id == user_id
+                )
+                .order_by(
+                    Booking.created_at.desc()
+                )
+            )
+        )

@@ -195,3 +195,44 @@ class BookingService:
 
         finally:
             db.close()
+
+
+    def get_user_bookings(
+        self,
+        user_id: str,
+    ) -> list[BookingResponse]:
+
+        db = SessionLocal()
+
+        try:
+            repository = BookingRepository(db)
+
+            bookings = repository.get_user_bookings(
+                user_id=user_id
+            )
+
+            return [
+                BookingResponse(
+                    booking_id=booking.booking_id,
+                    user_id=booking.user_id,
+                    session_id=booking.session_id,
+                    option_id=booking.option_id,
+                    status=booking.status,
+                    mode=booking.mode,
+                    provider=booking.provider,
+                    origin=booking.origin,
+                    destination=booking.destination,
+                    departure_time=booking.departure_time,
+                    arrival_time=booking.arrival_time,
+                    duration_minutes=booking.duration_minutes,
+                    price=booking.price,
+                    currency=booking.currency,
+                    travellers=booking.travellers,
+                    total_price=booking.total_price,
+                    created_at=booking.created_at,
+                )
+                for booking in bookings
+            ]
+
+        finally:
+            db.close()

@@ -242,6 +242,44 @@ def main():
     print_result("TURN 5 — DUPLICATE CONFIRMATION TEST", result_5)
 
 
+    # ========================================================
+    # TURN 6 — GET MY BOOKINGS
+    # ========================================================
+
+    print("=" * 70)
+    print("TURN 6 — GET MY BOOKINGS")
+    print("=" * 70)
+
+    result = agent.run(
+        user_id="user_001",
+        session_id="session_001",
+        user_message="Show my bookings",
+    )
+
+    print()
+    print("PERCEPTION")
+    print("-" * 30)
+
+    perception = result.get("perception")
+
+    if perception:
+        print(
+            perception.model_dump_json(
+                indent=2
+            )
+        )
+
+    print()
+    print("ANSWER")
+    print("-" * 30)
+
+    messages = result.get("messages", [])
+
+    if messages:
+        print(
+            messages[-1].content
+        )
+
 # ============================================================
 # SCRIPT ENTRY POINT
 # ============================================================

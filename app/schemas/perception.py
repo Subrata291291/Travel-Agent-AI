@@ -24,6 +24,7 @@ class TripPerception(BaseModel):
         "find_hotel",
         "find_restaurant",
         "book_trip",
+        "get_bookings",
         "question",
         "other",
     ] = Field(
