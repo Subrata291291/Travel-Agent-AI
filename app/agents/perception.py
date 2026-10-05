@@ -23,7 +23,11 @@ class PerceptionAgent:
 
     Important:
     This agent does NOT perform the actual booking.
+
     It only understands the user's request.
+
+    For booking conversations, it can also detect whether the
+    user explicitly confirmed or rejected a pending booking.
     """
 
     # Initialize the perception agent with the shared LLM router.
@@ -37,7 +41,12 @@ class PerceptionAgent:
     # a structured TripPerception object.
     #
     # Conversation history is provided so that short follow-up
-    # messages such as "Himachal Pradesh" or "Book TRAIN-1"
+    # messages such as:
+    #
+    #     "Himachal Pradesh"
+    #     "Book TRAIN-1"
+    #     "Yes, book it"
+    #
     # can be understood using previous conversation context.
     def understand(
         self,
@@ -205,8 +214,8 @@ The perception layer only identifies:
 
 1. The user's booking intent.
 2. The selected option ID.
-
-Actual booking is handled by another part of the system.
+3. Whether the user explicitly confirmed or rejected
+   a pending booking.
 
 
 OPTION ID RULES:
@@ -224,6 +233,132 @@ OPTION ID RULES:
 
 - If the user is not selecting a transport option,
   selected_option_id must be null.
+
+
+BOOKING CONFIRMATION RULES:
+
+The system may ask the user to confirm a booking
+before the actual booking is executed.
+
+You must detect the user's explicit confirmation
+status.
+
+Use ONLY these values:
+
+- "yes"
+- "no"
+- "unknown"
+
+
+Use confirmation = "yes" when the user clearly
+confirms the pending booking.
+
+Examples:
+
+User:
+"Yes"
+
+User:
+"Yes, book it"
+
+User:
+"Confirm"
+
+User:
+"Go ahead"
+
+User:
+"Proceed with the booking"
+
+User:
+"Yes, I want to book it"
+
+In these cases:
+
+confirmation = "yes"
+
+
+Use confirmation = "no" when the user clearly
+rejects, cancels, or does not want the pending
+booking.
+
+Examples:
+
+User:
+"No"
+
+User:
+"No, don't book it"
+
+User:
+"Cancel"
+
+User:
+"I don't want it"
+
+User:
+"Don't book"
+
+In these cases:
+
+confirmation = "no"
+
+
+Use confirmation = "unknown" when the user has
+not clearly confirmed or rejected the booking.
+
+Examples:
+
+User:
+"Which one is better?"
+
+User:
+"How much is it?"
+
+User:
+"Tell me the departure time."
+
+User:
+"I am not sure."
+
+User:
+"Book TRAIN-1"
+
+The last example is important.
+
+"Book TRAIN-1" selects the option, but the system
+must still ask for explicit confirmation before
+executing the actual booking.
+
+Therefore:
+
+confirmation = "unknown"
+
+
+IMPORTANT BOOKING SAFETY RULE:
+
+Never interpret an ambiguous message as confirmation.
+
+Only use confirmation = "yes" when the user's
+message clearly and explicitly confirms the pending
+booking.
+
+Never assume that words such as:
+
+- okay
+- fine
+- sounds good
+- maybe
+- I think so
+
+mean booking confirmation unless the context makes
+the confirmation explicit.
+
+The actual booking is handled by another part of
+the application.
+
+This perception layer must NEVER claim that a booking
+has been completed.
 
 
 CURRENCY RULES:
@@ -316,6 +451,7 @@ The JSON object must contain exactly these fields:
 - preferences
 - transport_mode
 - selected_option_id
+- confirmation
 
 
 FIELD RULES:
@@ -350,6 +486,19 @@ selected_option_id:
   selects a previously displayed transport option.
 
 - Never invent an option ID.
+
+
+confirmation must be one of:
+
+- "yes"
+- "no"
+- "unknown"
+
+Use "yes" only for explicit booking confirmation.
+
+Use "no" only for explicit rejection or cancellation.
+
+Use "unknown" when there is no clear confirmation.
 
 
 Unknown values:

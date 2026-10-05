@@ -222,6 +222,25 @@ def main():
         result_3,
     )
 
+    result_4 = agent.run(
+        user_message="Yes, book it",
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    print_result(
+        "TURN 4 — CONFIRM BOOKING",
+        result_4,
+    )
+
+    result_5 = agent.run(
+        user_message="Yes, book it",
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    print_result("TURN 5 — DUPLICATE CONFIRMATION TEST", result_5)
+
 
 # ============================================================
 # SCRIPT ENTRY POINT
