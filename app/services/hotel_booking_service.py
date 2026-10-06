@@ -275,9 +275,14 @@ class HotelBookingService:
     def get_booking(
         self,
         booking_id: str,
+        user_id: str,
     ) -> HotelBookingResponse:
         """
-        Retrieve a hotel booking by booking ID.
+        Retrieve one hotel booking securely.
+
+        Business rules:
+        - Booking must exist.
+        - Booking must belong to current user.
         """
 
         db = SessionLocal()
@@ -285,11 +290,22 @@ class HotelBookingService:
         try:
             repository = HotelBookingRepository(db)
 
-            booking = repository.get_by_id(booking_id)
+            booking = repository.get_by_id(
+                booking_id
+            )
 
             if not booking:
                 raise ValueError(
                     f"Hotel booking {booking_id} was not found."
+                )
+
+            # ------------------------------------------------
+            # Ownership check
+            # ------------------------------------------------
+
+            if booking.user_id != user_id:
+                raise PermissionError(
+                    "You are not allowed to view this booking."
                 )
 
             return self._to_response(booking)

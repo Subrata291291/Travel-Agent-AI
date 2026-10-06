@@ -2149,11 +2149,12 @@ class TravelAgentGraph:
 
         booking_id = perception.booking_id
 
-        if not booking_id:
-            state["response"] = (
-                "I couldn't find a booking ID in your request."
-            )
-            return state
+        state["answer"] = (
+            f"I couldn't find any booking with ID "
+            f"{booking_id}."
+        )
+
+        return state
 
         # ======================================================
         # 1. Try HOTEL booking
@@ -2162,7 +2163,8 @@ class TravelAgentGraph:
         try:
             hotel_booking = (
                 self.hotel_booking_service.get_booking(
-                    booking_id
+                    booking_id,
+                    state["user_id"],
                 )
             )
 
@@ -2203,16 +2205,37 @@ class TravelAgentGraph:
 
         try:
             booking = self.booking_service.get_booking(
-                booking_id
+                booking_id,
+                state["user_id"],
             )
 
             state["answer"] = (
                 "Here are your transport booking details:\n\n"
                 f"Booking ID: {booking.booking_id}\n"
+                f"Mode: {booking.mode}\n"
+                f"Provider: {booking.provider}\n"
+                f"From: {booking.origin}\n"
+                f"To: {booking.destination}\n"
+                f"Departure: {booking.departure_time}\n"
+                f"Arrival: {booking.arrival_time}\n"
+                f"Duration: {booking.duration_minutes} minutes\n"
+                f"Travellers: {booking.travellers}\n"
+                f"Price per traveller: "
+                f"{booking.currency} "
+                f"{booking.price:.2f}\n"
+                f"Total price: "
+                f"{booking.currency} "
+                f"{booking.total_price:.2f}\n"
                 f"Status: {booking.status}\n"
-                f"Created at: {booking.created_at}\n"
+                f"Created at: {booking.created_at}"
             )
 
+            return state
+
+        except PermissionError:
+            state["answer"] = (
+                f"I couldn't find a booking with ID {booking_id}."
+            )
             return state
 
         except ValueError:
@@ -2300,10 +2323,13 @@ class TravelAgentGraph:
         # Get booking ID
         # ----------------------------------------------------
 
-        booking_id = getattr(
-            perception,
-            "booking_id",
-            None,
+        booking_id = (
+            state.get("pending_cancellation_booking_id")
+            or getattr(
+                perception,
+                "booking_id",
+                None,
+            )
         )
 
         # ----------------------------------------------------
@@ -2472,7 +2498,14 @@ class TravelAgentGraph:
             # No pending booking confirmation remains.
             "pending_booking_confirmation": False,
 
-            # Clear selected transport option.
+            # No booking domain remains pending.
+            "pending_booking_domain": None,
+
+            # Cancellation has been completed.
+            # Clear the booking ID waiting for cancellation confirmation.
+            "pending_cancellation_booking_id": None,
+
+            # Clear selected option.
             "selected_option_id": None,
         }
 
@@ -2483,17 +2516,17 @@ class TravelAgentGraph:
         """
         Start cancellation of an existing booking.
 
-        IMPORTANT:
-        This node does NOT modify the database.
-
-        It only:
+        This node:
             1. Reads the booking ID.
-            2. Stores it as pending cancellation.
-            3. Asks the user for explicit confirmation.
+            2. Verifies that the booking exists and belongs
+            to the current user.
+            3. Checks whether it is already cancelled.
+            4. Stores it as pending cancellation only when
+            explicit confirmation is still required.
+            5. Does NOT modify the database.
 
-        The actual database cancellation happens only inside
-        execute_existing_cancellation_node() after the user
-        confirms with "yes".
+        Actual cancellation happens only after the user
+        confirms with "Yes".
         """
 
         # ----------------------------------------------------
@@ -2519,10 +2552,6 @@ class TravelAgentGraph:
             None,
         )
 
-        # ----------------------------------------------------
-        # Booking ID missing
-        # ----------------------------------------------------
-
         if not booking_id:
             state["answer"] = (
                 "Please provide the booking ID "
@@ -2530,25 +2559,123 @@ class TravelAgentGraph:
             )
             return state
 
-        # ----------------------------------------------------
-        # Store booking ID for the next turn.
-        #
-        # IMPORTANT:
-        # No database update happens here.
-        # ----------------------------------------------------
+        user_id = state["user_id"]
 
-        state["pending_cancellation_booking_id"] = booking_id
+        # ====================================================
+        # 1. Try HOTEL booking
+        # ====================================================
 
-        # ----------------------------------------------------
-        # Ask for explicit confirmation
-        # ----------------------------------------------------
+        try:
+            hotel_booking = (
+                self.hotel_booking_service.get_booking(
+                    booking_id,
+                    user_id,
+                )
+            )
+
+            # Already cancelled
+            if hotel_booking.status == "cancelled":
+                state["answer"] = (
+                    f"Hotel booking {booking_id} "
+                    "is already cancelled."
+                )
+
+                state["pending_cancellation_booking_id"] = None
+
+                return state
+
+            # Only confirmed bookings should proceed
+            # to cancellation confirmation.
+            if hotel_booking.status != "confirmed":
+                state["answer"] = (
+                    f"Hotel booking {booking_id} cannot be "
+                    f"cancelled because its current status is "
+                    f"{hotel_booking.status}."
+                )
+
+                state["pending_cancellation_booking_id"] = None
+
+                return state
+
+            # Valid confirmed hotel booking.
+            state["pending_cancellation_booking_id"] = (
+                booking_id
+            )
+
+            state["answer"] = (
+                f"Are you sure you want to cancel booking "
+                f"{booking_id}?\n\n"
+                "This action will change the booking status. "
+                "Please reply Yes or No."
+            )
+
+            return state
+
+        except ValueError:
+            # Not a hotel booking.
+            pass
+
+        # ====================================================
+        # 2. Try TRANSPORT booking
+        # ====================================================
+
+        try:
+            booking = self.booking_service.get_booking(
+                booking_id,
+                user_id,
+            )
+
+            # Already cancelled
+            if booking.status == "cancelled":
+                state["answer"] = (
+                    f"Booking {booking_id} "
+                    "is already cancelled."
+                )
+
+                state["pending_cancellation_booking_id"] = None
+
+                return state
+
+            # Only confirmed bookings should proceed
+            # to cancellation confirmation.
+            if booking.status != "confirmed":
+                state["answer"] = (
+                    f"Booking {booking_id} cannot be "
+                    f"cancelled because its current status is "
+                    f"{booking.status}."
+                )
+
+                state["pending_cancellation_booking_id"] = None
+
+                return state
+
+            # Valid confirmed transport booking.
+            state["pending_cancellation_booking_id"] = (
+                booking_id
+            )
+
+            state["answer"] = (
+                f"Are you sure you want to cancel booking "
+                f"{booking_id}?\n\n"
+                "This action will change the booking status. "
+                "Please reply Yes or No."
+            )
+
+            return state
+
+        except ValueError:
+            pass
+
+        # ====================================================
+        # 3. Booking not found
+        # ====================================================
 
         state["answer"] = (
-            f"Are you sure you want to cancel booking "
-            f"{booking_id}?\n\n"
-            "This action will change the booking status. "
-            "Please reply Yes or No."
+            f"I couldn't find any booking with ID "
+            f"{booking_id}."
         )
+
+        state["pending_cancellation_booking_id"] = None
 
         return state
 
@@ -2715,18 +2842,26 @@ class TravelAgentGraph:
         state: TravelState,
     ):
         """
-        Execute a confirmed booking.
+        Execute a confirmed transport booking.
 
-        This function is reached ONLY when:
+        Flow:
 
-            pending_booking_confirmation == True
+            pending confirmation
+                    ↓
+            explicit "yes"
+                    ↓
+            validate selected option
+                    ↓
+            check existing booking
+                    ↓
+            existing?
+            ├── YES → return existing booking
+            └── NO  → create new booking
 
-        AND:
-
-            perception.confirmation == "yes"
-
-        The LLM itself does not decide to execute this node.
-        Application state controls the transaction.
+        Important:
+        - The LLM does not directly execute the booking.
+        - Application state controls execution.
+        - Idempotency is enforced by BookingService.
         """
 
         # ----------------------------------------------------
@@ -2859,7 +2994,88 @@ class TravelAgentGraph:
         )
 
         # ----------------------------------------------------
-        # Execute booking transaction
+        # Check existing confirmed booking
+        # ----------------------------------------------------
+        #
+        # IMPORTANT:
+        # This uses the stable idempotency key.
+        #
+        # session_id is NOT used to determine whether the
+        # booking already exists.
+        # ----------------------------------------------------
+
+        try:
+
+            existing_booking = (
+                self.booking_service.get_existing_booking(
+                    request=request,
+                    selected_option=selected_option,
+                )
+            )
+
+        except Exception:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't verify whether this "
+                            "booking already exists. "
+                            "Please try again."
+                        )
+                    )
+                ],
+                "booking": None,
+            }
+
+        # ----------------------------------------------------
+        # Existing booking found
+        # ----------------------------------------------------
+
+        if existing_booking:
+
+            existing_message = (
+                "You already have a confirmed booking "
+                "for this travel option.\n\n"
+                f"Booking ID: {existing_booking.booking_id}\n"
+                f"Option: {existing_booking.option_id}\n"
+                f"Mode: {existing_booking.mode}\n"
+                f"Provider: {existing_booking.provider}\n"
+                f"From: {existing_booking.origin}\n"
+                f"To: {existing_booking.destination}\n"
+                f"Departure: {existing_booking.departure_time}\n"
+                f"Arrival: {existing_booking.arrival_time}\n"
+                f"Travellers: {existing_booking.travellers}\n"
+                f"Total: {existing_booking.total_price} "
+                f"{existing_booking.currency}\n"
+                f"Status: {existing_booking.status}"
+            )
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=existing_message
+                    )
+                ],
+
+                "booking": existing_booking.model_dump(
+                    mode="json"
+                ),
+
+                # Booking request is complete.
+                "pending_booking_confirmation": False,
+
+                # Clear selected option.
+                "selected_option_id": None,
+            }
+
+        # ----------------------------------------------------
+        # No existing booking
+        # ----------------------------------------------------
+        #
+        # Create a new booking.
+        # BookingService performs the final database-level
+        # idempotency protection as well.
         # ----------------------------------------------------
 
         try:
@@ -2919,7 +3135,7 @@ class TravelAgentGraph:
             # Booking is complete.
             "pending_booking_confirmation": False,
 
-            # Clear selected option after successful booking.
+            # Clear selected option after booking.
             "selected_option_id": None,
         }
 
@@ -3651,12 +3867,12 @@ unsupported information.
                     False
                 ),
 
-                "pending_booking_domain": result.get(
-                    "pending_booking_domain"
-                ),
-
                 "pending_cancellation_booking_id": result.get(
                     "pending_cancellation_booking_id"
+                ),
+
+                "pending_booking_domain": result.get(
+                    "pending_booking_domain"
                 ),
 
                 "booking": result.get(
@@ -3748,9 +3964,9 @@ unsupported information.
 
             "messages": messages,
 
-            "answer": result.get(
-                "answer",
-                final_message.content,
+            "answer": (
+                result.get("answer")
+                or final_message.content
             ),
         }
 

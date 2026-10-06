@@ -1,4 +1,6 @@
+from urllib import request
 from uuid import uuid4
+import hashlib
 
 from app.database.connection import (
     SessionLocal,
@@ -15,22 +17,29 @@ from app.schemas.booking import (
     BookingRequest,
     BookingResponse,
 )
+
 from sqlalchemy.exc import IntegrityError
+
 
 class BookingService:
     """
-    Business layer responsible for creating bookings.
+    Business layer responsible for creating and managing bookings.
 
     Role:
     - Validate booking input.
+    - Generate stable idempotency keys.
+    - Prevent duplicate bookings.
     - Calculate total price.
     - Create the Booking database object.
     - Persist it through BookingRepository.
-    - Return a clean BookingResponse.
+    - Retrieve bookings securely.
+    - Cancel bookings according to business rules.
+    - Return clean BookingResponse objects.
 
     Important:
-    The LLM does NOT directly control this service.
-    The application calls it only after explicit confirmation.
+    - The LLM does NOT directly control this service.
+    - The application calls this service only after explicit
+      booking confirmation.
     """
 
     def __init__(self):
@@ -38,8 +47,133 @@ class BookingService:
         init_db()
 
     # ========================================================
+    # INTERNAL HELPERS
+    # ========================================================
+
+    @staticmethod
+    def _build_idempotency_key(
+        request: BookingRequest,
+        selected_option: dict,
+    ) -> str:
+        """
+        Build a stable idempotency key for a booking.
+
+        IMPORTANT:
+        session_id is intentionally NOT included.
+
+        Why?
+
+        A user can start a new conversation/session and still
+        attempt to book the exact same itinerary.
+
+        The idempotency key therefore represents the actual
+        booking intent rather than the chat session.
+
+        Current identity:
+
+        user
+        + option
+        + mode
+        + origin
+        + destination
+        + departure
+        + arrival
+        + travellers
+        """
+
+        idempotency_source = "|".join(
+            [
+                str(request.user_id),
+                str(request.option_id),
+                str(selected_option.get("mode", "")),
+                str(selected_option.get("origin", "")),
+                str(selected_option.get("destination", "")),
+                str(selected_option.get("departure_time", "")),
+                str(selected_option.get("arrival_time", "")),
+                str(request.travellers),
+            ]
+        )
+
+        return hashlib.sha256(
+            idempotency_source.encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
+    def _to_response(
+        booking: Booking,
+    ) -> BookingResponse:
+        """
+        Convert a database Booking object into the stable
+        application-level BookingResponse schema.
+        """
+
+        return BookingResponse(
+            booking_id=booking.booking_id,
+            user_id=booking.user_id,
+            session_id=booking.session_id,
+            option_id=booking.option_id,
+            status=booking.status,
+            mode=booking.mode,
+            provider=booking.provider,
+            origin=booking.origin,
+            destination=booking.destination,
+            departure_time=booking.departure_time,
+            arrival_time=booking.arrival_time,
+            duration_minutes=booking.duration_minutes,
+            price=booking.price,
+            currency=booking.currency,
+            travellers=booking.travellers,
+            total_price=booking.total_price,
+            created_at=booking.created_at,
+        )
+
+    # ========================================================
     # CREATE BOOKING
     # ========================================================
+    def get_existing_booking(
+        self,
+        request: BookingRequest,
+        selected_option: dict,
+    ) -> BookingResponse | None:
+        """
+        Check whether the exact booking intent has already
+        been confirmed.
+
+        This uses the same stable idempotency key as
+        create_booking().
+
+        Important:
+        - session_id is NOT part of the idempotency identity.
+        - Different chat sessions can therefore resolve to
+        the same existing booking.
+        """
+
+        idempotency_key = self._build_idempotency_key(
+            request=request,
+            selected_option=selected_option,
+        )
+
+        db = SessionLocal()
+
+        try:
+            repository = BookingRepository(db)
+
+            booking = (
+                repository.get_booking_by_idempotency_key(
+                    idempotency_key=idempotency_key,
+                )
+            )
+
+            if not booking:
+                return None
+
+            return self._to_response(
+                booking
+            )
+
+        finally:
+            db.close()
+
     def create_booking(
         self,
         request: BookingRequest,
@@ -57,13 +191,23 @@ class BookingService:
             )
 
         # ----------------------------------------------------
-        # 2. DUPLICATE BOOKING PROTECTION
+        # 2. Generate stable idempotency key
         # ----------------------------------------------------
         #
-        # If the exact same user/session/option already has
-        # a confirmed booking, DO NOT create another booking.
+        # IMPORTANT:
+        # session_id is intentionally NOT included.
         #
-        # Instead, return the existing booking.
+        # This allows duplicate protection to work even when
+        # the same user starts a new chat session.
+        # ----------------------------------------------------
+
+        idempotency_key = self._build_idempotency_key(
+            request=request,
+            selected_option=selected_option,
+        )
+
+        # ----------------------------------------------------
+        # 3. Database session
         # ----------------------------------------------------
 
         db = SessionLocal()
@@ -71,36 +215,30 @@ class BookingService:
         try:
             repository = BookingRepository(db)
 
-            existing_booking = repository.get_confirmed_booking(
-                user_id=request.user_id,
-                session_id=request.session_id,
-                option_id=request.option_id,
+            # ------------------------------------------------
+            # 4. Check existing booking by idempotency key
+            # ------------------------------------------------
+            #
+            # This is the main duplicate protection.
+            #
+            # Same user + same itinerary across different
+            # sessions will produce the same key.
+            # ------------------------------------------------
+
+            existing_booking = (
+                repository.get_booking_by_idempotency_key(
+                    idempotency_key=idempotency_key,
+                )
             )
 
             if existing_booking:
 
-                return BookingResponse(
-                    booking_id=existing_booking.booking_id,
-                    user_id=existing_booking.user_id,
-                    session_id=existing_booking.session_id,
-                    option_id=existing_booking.option_id,
-                    status=existing_booking.status,
-                    mode=existing_booking.mode,
-                    provider=existing_booking.provider,
-                    origin=existing_booking.origin,
-                    destination=existing_booking.destination,
-                    departure_time=existing_booking.departure_time,
-                    arrival_time=existing_booking.arrival_time,
-                    duration_minutes=existing_booking.duration_minutes,
-                    price=existing_booking.price,
-                    currency=existing_booking.currency,
-                    travellers=existing_booking.travellers,
-                    total_price=existing_booking.total_price,
-                    created_at=existing_booking.created_at,
+                return self._to_response(
+                    existing_booking
                 )
 
             # ------------------------------------------------
-            # 3. Create NEW booking
+            # 5. Calculate price
             # ------------------------------------------------
 
             price = float(
@@ -111,56 +249,119 @@ class BookingService:
                 price * request.travellers
             )
 
+            # ------------------------------------------------
+            # 6. Generate booking ID
+            # ------------------------------------------------
+
             booking_id = (
                 f"BOOK-{uuid4().hex[:12].upper()}"
             )
 
+            # ------------------------------------------------
+            # 7. Create database booking object
+            # ------------------------------------------------
+
             booking = Booking(
                 booking_id=booking_id,
+
                 user_id=request.user_id,
+
+                # Keep the current conversation/session ID
+                # for audit/history purposes.
                 session_id=request.session_id,
+
                 option_id=request.option_id,
-                mode=selected_option.get("mode", ""),
-                provider=selected_option.get("provider", ""),
-                origin=selected_option.get("origin", ""),
-                destination=selected_option.get("destination", ""),
+
+                # IMPORTANT:
+                # Persist the stable idempotency key.
+                idempotency_key=idempotency_key,
+
+                mode=selected_option.get(
+                    "mode",
+                    "",
+                ),
+
+                provider=selected_option.get(
+                    "provider",
+                    "",
+                ),
+
+                origin=selected_option.get(
+                    "origin",
+                    "",
+                ),
+
+                destination=selected_option.get(
+                    "destination",
+                    "",
+                ),
+
                 departure_time=selected_option.get(
                     "departure_time",
                     "",
                 ),
+
                 arrival_time=selected_option.get(
                     "arrival_time",
                     "",
                 ),
+
                 duration_minutes=int(
                     selected_option.get(
                         "duration_minutes",
                         0,
                     )
                 ),
+
                 price=price,
+
                 currency=selected_option.get(
                     "currency",
                     "INR",
                 ),
+
                 travellers=request.travellers,
+
                 total_price=total_price,
+
                 status="confirmed",
             )
 
+            # ------------------------------------------------
+            # 8. Persist booking
+            # ------------------------------------------------
+
             try:
+
                 booking = repository.create(
                     booking
                 )
 
             except IntegrityError:
 
+                # ------------------------------------------------
+                # Race-condition protection
+                # ------------------------------------------------
+                #
+                # Example:
+                #
+                # Request A → checks key → nothing found
+                # Request B → checks key → nothing found
+                #
+                # Both try INSERT at almost the same time.
+                #
+                # Database UNIQUE constraint allows only one.
+                #
+                # If this request loses the race, retrieve the
+                # booking that was created by the other request.
+                # ------------------------------------------------
+
                 db.rollback()
 
-                existing_booking = repository.get_confirmed_booking(
-                    user_id=request.user_id,
-                    session_id=request.session_id,
-                    option_id=request.option_id,
+                existing_booking = (
+                    repository.get_booking_by_idempotency_key(
+                        idempotency_key=idempotency_key,
+                    )
                 )
 
                 if not existing_booking:
@@ -168,24 +369,73 @@ class BookingService:
 
                 booking = existing_booking
 
-            return BookingResponse(
-                booking_id=booking.booking_id,
-                user_id=booking.user_id,
-                session_id=booking.session_id,
-                option_id=booking.option_id,
-                status=booking.status,
-                mode=booking.mode,
-                provider=booking.provider,
-                origin=booking.origin,
-                destination=booking.destination,
-                departure_time=booking.departure_time,
-                arrival_time=booking.arrival_time,
-                duration_minutes=booking.duration_minutes,
-                price=booking.price,
-                currency=booking.currency,
-                travellers=booking.travellers,
-                total_price=booking.total_price,
-                created_at=booking.created_at,
+            # ------------------------------------------------
+            # 9. Return stable application response
+            # ------------------------------------------------
+
+            return self._to_response(
+                booking
+            )
+
+        except Exception:
+            db.rollback()
+            raise
+
+        finally:
+            db.close()
+
+    # ========================================================
+    # GET BOOKING BY ID
+    # ========================================================
+
+    def get_booking(
+        self,
+        booking_id: str,
+        user_id: str,
+    ) -> BookingResponse:
+        """
+        Retrieve one booking by its public booking ID.
+
+        Business rules:
+        - Booking must exist.
+        - Booking must belong to the current user.
+        - The LLM does not directly access the database.
+        - The repository performs the database lookup.
+        """
+
+        db = SessionLocal()
+
+        try:
+            repository = BookingRepository(db)
+
+            # ------------------------------------------------
+            # 1. Find booking
+            # ------------------------------------------------
+
+            booking = repository.get_by_id(
+                booking_id
+            )
+
+            if not booking:
+                raise ValueError(
+                    f"Booking {booking_id} was not found."
+                )
+
+            # ------------------------------------------------
+            # 2. Ownership check
+            # ------------------------------------------------
+
+            if booking.user_id != user_id:
+                raise PermissionError(
+                    "You are not allowed to view this booking."
+                )
+
+            # ------------------------------------------------
+            # 3. Return stable application response
+            # ------------------------------------------------
+
+            return self._to_response(
+                booking
             )
 
         except Exception:
@@ -198,6 +448,7 @@ class BookingService:
     # ========================================================
     # CANCEL BOOKING
     # ========================================================
+
     def cancel_booking(
         self,
         booking_id: str,
@@ -211,7 +462,7 @@ class BookingService:
         - Booking must belong to the current user.
         - Booking must currently be confirmed.
         - Cancellation is performed by the application,
-        never by the LLM.
+          never by the LLM.
         """
 
         db = SessionLocal()
@@ -219,9 +470,9 @@ class BookingService:
         try:
             repository = BookingRepository(db)
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 1. Find booking
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             booking = repository.get_by_id(
                 booking_id
@@ -232,27 +483,27 @@ class BookingService:
                     f"Booking {booking_id} was not found."
                 )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 2. Ownership check
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             if booking.user_id != user_id:
                 raise PermissionError(
                     "You are not allowed to cancel this booking."
                 )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 3. Already cancelled?
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             if booking.status == "cancelled":
                 raise ValueError(
                     f"Booking {booking_id} is already cancelled."
                 )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 4. Only confirmed bookings can be cancelled
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             if booking.status != "confirmed":
                 raise ValueError(
@@ -261,41 +512,25 @@ class BookingService:
                     f"{booking.status}."
                 )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 5. Change booking state
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             booking.status = "cancelled"
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 6. Persist transaction
-            # --------------------------------------------------
+            # ------------------------------------------------
 
             db.commit()
             db.refresh(booking)
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # 7. Return stable application response
-            # --------------------------------------------------
+            # ------------------------------------------------
 
-            return BookingResponse(
-                booking_id=booking.booking_id,
-                user_id=booking.user_id,
-                session_id=booking.session_id,
-                option_id=booking.option_id,
-                status=booking.status,
-                mode=booking.mode,
-                provider=booking.provider,
-                origin=booking.origin,
-                destination=booking.destination,
-                departure_time=booking.departure_time,
-                arrival_time=booking.arrival_time,
-                duration_minutes=booking.duration_minutes,
-                price=booking.price,
-                currency=booking.currency,
-                travellers=booking.travellers,
-                total_price=booking.total_price,
-                created_at=booking.created_at,
+            return self._to_response(
+                booking
             )
 
         except Exception:
@@ -324,24 +559,8 @@ class BookingService:
             )
 
             return [
-                BookingResponse(
-                    booking_id=booking.booking_id,
-                    user_id=booking.user_id,
-                    session_id=booking.session_id,
-                    option_id=booking.option_id,
-                    status=booking.status,
-                    mode=booking.mode,
-                    provider=booking.provider,
-                    origin=booking.origin,
-                    destination=booking.destination,
-                    departure_time=booking.departure_time,
-                    arrival_time=booking.arrival_time,
-                    duration_minutes=booking.duration_minutes,
-                    price=booking.price,
-                    currency=booking.currency,
-                    travellers=booking.travellers,
-                    total_price=booking.total_price,
-                    created_at=booking.created_at,
+                self._to_response(
+                    booking
                 )
                 for booking in bookings
             ]

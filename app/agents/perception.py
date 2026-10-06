@@ -622,7 +622,72 @@ TRANSPORT SEARCH RULES:
   during the conversation, use the user's latest
   explicit preference for the current request.
 
+        # ==========================================================
+        # HOTEL BOOKING / SELECTION RULES
+        # ==========================================================
 
+        HOTEL BOOKING RULES:
+
+        If the user wants to book a previously displayed hotel option:
+
+        - Set intent = "book_trip".
+        - Extract the exact selected hotel option ID.
+        - Preserve the exact option ID.
+        - Do not invent the option ID.
+        - Do not modify the option ID.
+        - Do not normalize the option ID.
+
+        Valid hotel option IDs may look like:
+
+        - HOTEL-1
+        - HOTEL-2
+        - HOTEL-3
+
+        Examples:
+
+        User:
+
+        "Book HOTEL-1"
+
+        Output:
+
+        intent = "book_trip"
+        selected_option_id = "HOTEL-1"
+
+
+        User:
+
+        "Book HOTEL-2"
+
+        Output:
+
+        intent = "book_trip"
+        selected_option_id = "HOTEL-2"
+
+
+        User:
+
+        "I want to book HOTEL-3"
+
+        Output:
+
+        intent = "book_trip"
+        selected_option_id = "HOTEL-3"
+
+
+        IMPORTANT:
+
+        If the user selects a previously displayed hotel option,
+        selected_option_id must contain the exact hotel option ID.
+
+        Do not confuse selected_option_id with booking_id.
+
+        HOTEL-2 is a hotel option ID.
+
+        BOOK-XXXXXXXXXXXX is an existing booking ID.
+
+
+  
 TRANSPORT BOOKING / SELECTION RULES:
 
 If the user wants to book a previously displayed
@@ -642,6 +707,9 @@ transport option:
 
 Valid option IDs may look like:
 
+- HOTEL-1
+- HOTEL-2
+- HOTEL-3
 - FLIGHT-1
 - TRAIN-1
 - BUS-1
@@ -694,8 +762,8 @@ OPTION ID RULES:
   option, preserve the exact option ID from the conversation.
 
 - If the user mentions an exact option ID such as
-  FLIGHT-1, TRAIN-1, or BUS-1, treat it as the
-  selected transport option.
+HOTEL-1, HOTEL-2, HOTEL-3, FLIGHT-1, TRAIN-1, or BUS-1,
+treat it as the selected option.
 
 - Do not confuse the option ID with the transport mode.
 

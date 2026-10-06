@@ -45,6 +45,25 @@ class BookingRepository:
             .order_by(Booking.created_at.desc())
         )
 
+    def get_booking_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> Booking | None:
+        """
+        Find an existing booking using its stable idempotency key.
+
+        Why this exists:
+        - Prevents duplicate bookings across different chat sessions.
+        - Uses the database-level unique idempotency key.
+        - Returns the existing booking instead of creating another one.
+        """
+
+        return self.db.scalar(
+            select(Booking)
+            .where(
+                Booking.idempotency_key == idempotency_key,
+            )
+        )
 
     def get_user_bookings(
         self,
