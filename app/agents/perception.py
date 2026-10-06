@@ -62,6 +62,31 @@ class PerceptionAgent:
             "my bookings",
             "my booking history",
             "booking history",
+
+            # Hotel booking history
+            "show my hotel bookings",
+            "show my hotel booking",
+            "list my hotel bookings",
+            "list my hotel booking",
+            "view my hotel bookings",
+            "view my hotel booking",
+            "see my hotel bookings",
+            "see my hotel booking",
+            "get my hotel bookings",
+            "get my hotel booking",
+            "my hotel bookings",
+            "my hotel booking history",
+
+            # Transport booking history
+            "show my train bookings",
+            "show my train booking",
+            "show my flight bookings",
+            "show my flight booking",
+            "show my bus bookings",
+            "show my bus booking",
+            "show my transport bookings",
+            "show my transport booking",
+
             "show previous bookings",
             "show previous booking",
             "show my previous bookings",
@@ -78,6 +103,76 @@ class PerceptionAgent:
             for phrase in booking_history_phrases
         )
 
+    # ==============================================================
+    # DETERMINISTIC: BOOKING DOMAIN
+    # ==============================================================
+
+    def _detect_booking_domain(
+        self,
+        user_message: str,
+    ) -> str:
+        """
+        Detect which booking domain the user is referring to.
+
+        Returns:
+            "hotel"      -> hotel/resort/accommodation bookings
+            "transport"  -> train/flight/bus bookings
+            "unknown"    -> no specific booking domain mentioned
+
+        This is deterministic application logic because the
+        booking retrieval domain should be predictable.
+        """
+
+        text = user_message.strip().lower()
+
+        # ----------------------------------------------------------
+        # HOTEL
+        # ----------------------------------------------------------
+
+        hotel_keywords = [
+            "hotel",
+            "hotels",
+            "resort",
+            "resorts",
+            "accommodation",
+            "stay",
+            "room",
+            "rooms",
+        ]
+
+        if any(
+            keyword in text
+            for keyword in hotel_keywords
+        ):
+            return "hotel"
+
+        # ----------------------------------------------------------
+        # TRANSPORT
+        # ----------------------------------------------------------
+
+        transport_keywords = [
+            "train",
+            "trains",
+            "flight",
+            "flights",
+            "bus",
+            "buses",
+            "transport",
+            "railway",
+        ]
+
+        if any(
+            keyword in text
+            for keyword in transport_keywords
+        ):
+            return "transport"
+
+        # ----------------------------------------------------------
+        # UNKNOWN
+        # ----------------------------------------------------------
+
+        return "unknown"
+    
     # ==============================================================
     # DETERMINISTIC: CANCEL BOOKING
     # ==============================================================
@@ -188,6 +283,11 @@ class PerceptionAgent:
         # ==========================================================
 
         if self._is_get_bookings_request(user_message):
+
+            booking_domain = self._detect_booking_domain(
+                user_message
+            )
+
             return TripPerception(
                 intent="get_bookings",
                 destination=None,
@@ -201,6 +301,7 @@ class PerceptionAgent:
                 transport_mode="unknown",
                 selected_option_id=None,
                 booking_id=None,
+                booking_domain=booking_domain,
                 confirmation="unknown",
             )
 

@@ -156,6 +156,25 @@ class TripPerception(BaseModel):
     )
 
     # ========================================================
+    # BOOKING DOMAIN
+    # ========================================================
+
+    booking_domain: Literal[
+        "transport",
+        "hotel",
+        "unknown",
+    ] = Field(
+        default="unknown",
+        description=(
+            "Domain of an existing booking request. "
+            "Use 'hotel' when the user asks about hotel "
+            "bookings, 'transport' for flight, train, or "
+            "bus bookings, and 'unknown' when the booking "
+            "domain is not specified."
+        ),
+    )
+
+    # ========================================================
     # BOOKING CONFIRMATION
     # ========================================================
 

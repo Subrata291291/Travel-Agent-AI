@@ -27,7 +27,8 @@ from app.schemas.tool import ToolContext
 from app.schemas.booking import BookingRequest
 
 from app.services.booking_service import BookingService
-
+from app.services.hotel_booking_service import HotelBookingService
+from app.schemas.hotel_booking import HotelBookingRequest
 
 # ============================================================
 # STATE
@@ -79,9 +80,15 @@ class TravelState(TypedDict):
     # True when application is waiting for explicit
     # booking confirmation.
     pending_booking_confirmation: bool
+    # True when application is waiting for explicit
+    # hotel booking confirmation.
+    pending_booking_domain: str | None
 
     # Final booking information after successful booking.
     booking: dict | None
+
+    # Hotel options discovered in previous turns.
+    hotel_options: list[dict]
 
 
 # ============================================================
@@ -143,6 +150,12 @@ class TravelAgentGraph:
 
         self.booking_service = BookingService()
 
+        #----------------------------------------------------
+        # Hotel booking service 
+        #----------------------------------------------------
+
+        self.hotel_booking_service = HotelBookingService()
+
         # ----------------------------------------------------
         # Build graph
         # ----------------------------------------------------
@@ -187,6 +200,16 @@ class TravelAgentGraph:
         graph.add_node(
             "booking_confirmation",
             self.booking_confirmation_node,
+        )
+
+        graph.add_node(
+            "hotel_booking_confirmation",
+            self.hotel_booking_confirmation_node,
+        )
+
+        graph.add_node(
+            "hotel_booking_execution",
+            self.hotel_booking_execution_node,
         )
 
         graph.add_node(
@@ -260,6 +283,8 @@ class TravelAgentGraph:
                 "destination": "destination_resolver",
                 "booking_already_exists": "booking_already_exists",
                 "get_bookings": "get_bookings",
+                "hotel_booking_confirmation": "hotel_booking_confirmation",
+                "hotel_booking_execution": "hotel_booking_execution",
             },
         )
 
@@ -758,84 +783,103 @@ class TravelAgentGraph:
 
     def perception_route(self, state: TravelState):
         """
-        Decide what happens after perception.
+        Decide which workflow should run after perception.
 
-        Booking routing is deterministic.
+        Booking requests are routed by domain:
+        - HOTEL-* → hotel booking flow
+        - TRAIN-*, FLIGHT-*, BUS-* → transport booking flow
 
-        Priority:
-        1. Existing booking cancellation
-        2. Already confirmed booking
-        3. Pending booking confirmation
-        4. Get user bookings
-        5. New booking request
-        6. Normal travel flow
+        Existing cancellation and confirmation behavior
+        remains controlled by the application state.
         """
 
         perception = state.get("perception")
 
+        # --------------------------------------------------------
+        # Handle pending booking confirmation.
+        #
+        # The application state tells us which booking domain
+        # is waiting for confirmation.
+        # --------------------------------------------------------
+
+        if state.get("pending_booking_confirmation"):
+            pending_domain = state.get(
+                "pending_booking_domain"
+            )
+
+            confirmation = (
+                perception.confirmation
+                if perception
+                else "unknown"
+            )
+
+            # Hotel booking confirmation
+            if pending_domain == "hotel":
+
+                if confirmation == "yes":
+                    return "hotel_booking_execution"
+
+                if confirmation == "no":
+                    return "booking_cancel"
+
+                return "wait_booking"
+
+            # Existing transport booking confirmation
+            if pending_domain == "transport":
+
+                if confirmation == "yes":
+                    return "execute_booking"
+
+                if confirmation == "no":
+                    return "cancel_booking"
+
+                return "wait_booking"
+
         if not perception:
             return "destination"
 
-        # CASE 1 — EXISTING BOOKING CANCELLATION
+        # --------------------------------------------------------
+        # Explicit existing-booking cancellation
+        # --------------------------------------------------------
+
         if perception.intent == "cancel_booking":
             return "cancel_existing_booking"
 
-        # CASE 2 — BOOKING ALREADY EXISTS
-        existing_booking = state.get("booking")
-
-        if existing_booking:
-            confirmation = getattr(perception, "confirmation", "unknown")
-            intent = getattr(perception, "intent", None)
-
-            if confirmation == "yes" or intent == "book_trip":
-                return "booking_already_exists"
-
-
-        # ====================================================
-        # CASE 3 — PENDING BOOKING
-        # ====================================================
-
-        pending_booking = state.get(
-            "pending_booking_confirmation",
-            False,
-        )
-
-        if pending_booking:
-
-            confirmation = getattr(
-                perception,
-                "confirmation",
-                "unknown",
-            )
-
-            if confirmation == "yes":
-                return "execute_booking"
-
-            if confirmation == "no":
-                return "cancel_booking"
-
-            return "wait_booking"
-
-        # ====================================================
-        # CASE 4 — GET USER BOOKINGS
-        # ====================================================
+        # --------------------------------------------------------
+        # Retrieve existing bookings
+        # --------------------------------------------------------
 
         if perception.intent == "get_bookings":
             return "get_bookings"
 
-        # ====================================================
-        # CASE 5 — NEW BOOKING REQUEST
-        # ====================================================
+        # --------------------------------------------------------
+        # Booking request
+        # --------------------------------------------------------
 
         if (
             perception.intent == "book_trip"
             and perception.selected_option_id
         ):
-            return "new_booking"
+            selected_option_id = (
+                perception.selected_option_id.upper()
+            )
 
-        # ====================================================
-        # CASE 6 — NORMAL TRAVEL FLOW
-        # ====================================================
+            # Hotel booking
+            if selected_option_id.startswith("HOTEL-"):
+                return "hotel_booking_confirmation"
+
+            # Transport booking
+            if selected_option_id.startswith(
+                (
+                    "TRAIN-",
+                    "FLIGHT-",
+                    "BUS-",
+                )
+            ):
+                return "new_booking"
+
+            # Unknown option type
+            return "new_booking"
 
         return "destination"
 
@@ -1096,8 +1140,372 @@ class TravelAgentGraph:
             ),
 
             "pending_booking_confirmation": True,
+            "pending_booking_domain": "transport",
         }
 
+
+    def hotel_booking_confirmation_node(
+        self,
+        state: TravelState,
+    ):
+        """
+        Validate the requested hotel option and ask for
+        explicit user confirmation.
+
+        IMPORTANT:
+        - Does NOT create a booking.
+        - Uses trusted hotel_options from application state.
+        - The actual database transaction happens only
+        after explicit confirmation.
+        """
+
+        perception = state.get("perception")
+
+        if not perception:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't determine which hotel "
+                            "you want to book."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+            }
+
+        selected_hotel_id = perception.selected_option_id
+
+        if not selected_hotel_id:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "Please provide the hotel option ID "
+                            "you want to book, such as HOTEL-2."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+            }
+
+        # --------------------------------------------------------
+        # Read trusted hotel results from application state.
+        # --------------------------------------------------------
+
+        hotel_options = state.get(
+            "hotel_options",
+            [],
+        )
+
+        selected_hotel = next(
+            (
+                hotel
+                for hotel in hotel_options
+                if hotel.get("hotel_id") == selected_hotel_id
+            ),
+            None,
+        )
+
+        # --------------------------------------------------------
+        # Hotel was not found.
+        # --------------------------------------------------------
+
+        if not selected_hotel:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            f"I couldn't find hotel option "
+                            f"{selected_hotel_id} from the previous "
+                            "hotel search results. Please search "
+                            "for hotels again."
+                        )
+                    )
+                ],
+                "selected_option_id": selected_hotel_id,
+                "pending_booking_confirmation": False,
+            }
+
+        # --------------------------------------------------------
+        # Extract trusted hotel information.
+        # --------------------------------------------------------
+
+        hotel_name = selected_hotel.get(
+            "name",
+            selected_hotel_id,
+        )
+
+        destination = selected_hotel.get(
+            "destination",
+            "",
+        )
+
+        check_in_date = selected_hotel.get(
+            "check_in_date",
+            "",
+        )
+
+        check_out_date = selected_hotel.get(
+            "check_out_date",
+            "",
+        )
+
+        price_per_night = selected_hotel.get(
+            "price_per_night"
+        )
+
+        currency = selected_hotel.get(
+            "currency",
+            "INR",
+        )
+
+        rating = selected_hotel.get(
+            "rating"
+        )
+
+        amenities = selected_hotel.get(
+            "amenities",
+            [],
+        )
+
+        # --------------------------------------------------------
+        # Build explicit confirmation message.
+        # --------------------------------------------------------
+
+        details = [
+            f"Hotel: {hotel_name}",
+            f"Hotel ID: {selected_hotel_id}",
+            f"Destination: {destination}",
+            f"Check-in: {check_in_date}",
+            f"Check-out: {check_out_date}",
+            f"Price per night: {price_per_night} {currency}",
+        ]
+
+        if rating is not None:
+            details.append(
+                f"Rating: {rating}/5"
+            )
+
+        if amenities:
+            details.append(
+                "Amenities: " + ", ".join(amenities)
+            )
+
+        confirmation_message = (
+            "I found the following hotel:\n\n"
+            + "\n".join(details)
+            + "\n\n"
+            "Do you want me to book this hotel?"
+        )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=confirmation_message
+                )
+            ],
+            "selected_option_id": selected_hotel_id,
+            "pending_booking_confirmation": True,
+            "pending_booking_domain": "hotel",
+        }
+
+
+    def hotel_booking_execution_node(
+        self,
+        state: TravelState,
+    ):
+        """
+        Execute a hotel booking only after explicit confirmation.
+
+        IMPORTANT:
+        - The LLM does NOT create the booking.
+        - The selected hotel must exist in trusted application state.
+        - The user must explicitly confirm with "yes".
+        - HotelBookingService performs the database transaction.
+        """
+
+        perception = state.get("perception")
+
+        # --------------------------------------------------------
+        # Safety check: perception must exist.
+        # --------------------------------------------------------
+
+        if not perception:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't determine the hotel booking "
+                            "request."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        # --------------------------------------------------------
+        # Safety check: explicit confirmation is required.
+        # --------------------------------------------------------
+
+        if perception.confirmation != "yes":
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "The hotel booking was not completed "
+                            "because explicit confirmation was not "
+                            "received."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        # --------------------------------------------------------
+        # Get selected hotel ID.
+        # --------------------------------------------------------
+
+        selected_hotel_id = (
+            perception.selected_option_id
+            or state.get("selected_option_id")
+        )
+
+        if not selected_hotel_id:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't determine which hotel "
+                            "you want to book."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        # --------------------------------------------------------
+        # Read trusted hotel results from application state.
+        # --------------------------------------------------------
+
+        hotel_options = state.get(
+            "hotel_options",
+            [],
+        )
+
+        selected_hotel = next(
+            (
+                hotel
+                for hotel in hotel_options
+                if hotel.get("hotel_id") == selected_hotel_id
+            ),
+            None,
+        )
+
+        if not selected_hotel:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            f"I couldn't find hotel option "
+                            f"{selected_hotel_id} in the current "
+                            "hotel search results. Please search "
+                            "for hotels again."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        # --------------------------------------------------------
+        # Build application-level booking request.
+        # --------------------------------------------------------
+
+        travellers = perception.travellers or 1
+
+        request = HotelBookingRequest(
+            user_id=state["user_id"],
+            session_id=state["session_id"],
+            hotel_id=selected_hotel_id,
+            travellers=travellers,
+        )
+
+        # --------------------------------------------------------
+        # Create the booking through the service layer.
+        #
+        # The LLM is NOT involved in this transaction.
+        # --------------------------------------------------------
+
+        try:
+            booking = self.hotel_booking_service.create_booking(
+                request=request,
+                selected_hotel=selected_hotel,
+            )
+
+        except ValueError as exc:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            f"Hotel booking could not be completed: "
+                            f"{exc}"
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        except Exception:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't complete the hotel booking "
+                            "because of a temporary system error. "
+                            "Please try again."
+                        )
+                    )
+                ],
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": None,
+            }
+
+        # --------------------------------------------------------
+        # Booking succeeded.
+        # --------------------------------------------------------
+
+        booking_dict = booking.model_dump()
+
+        confirmation_message = (
+            "Hotel booking confirmed successfully!\n\n"
+            f"Booking ID: {booking.booking_id}\n"
+            f"Hotel: {booking.hotel_name}\n"
+            f"Destination: {booking.destination}\n"
+            f"Check-in: {booking.check_in_date}\n"
+            f"Check-out: {booking.check_out_date}\n"
+            f"Travellers: {booking.travellers}\n"
+            f"Nights: {booking.nights}\n"
+            f"Total price: {booking.total_price} "
+            f"{booking.currency}\n"
+            f"Status: {booking.status}"
+        )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=confirmation_message
+                )
+            ],
+            "booking": booking_dict,
+            "selected_option_id": None,
+            "pending_booking_confirmation": False,
+            "pending_booking_domain": None,
+        }
 
     # ========================================================
     # NODE 6 — BOOKING ALREADY EXISTS
@@ -1173,6 +1581,18 @@ class TravelAgentGraph:
 
         user_id = state.get("user_id")
 
+        perception = state.get("perception")
+
+        booking_domain = (
+            getattr(
+                perception,
+                "booking_domain",
+                "unknown",
+            )
+            if perception
+            else "unknown"
+        )
+
         if not user_id:
             return {
                 "messages": [
@@ -1186,13 +1606,254 @@ class TravelAgentGraph:
             }
 
         # --------------------------------------------------------
+        # Determine booking domain
+        # --------------------------------------------------------
+
+        perception = state.get("perception")
+
+        booking_domain = (
+            getattr(
+                perception,
+                "booking_domain",
+                "unknown",
+            )
+            if perception
+            else "unknown"
+        )
+
+        # --------------------------------------------------------
         # Retrieve bookings from database
         # --------------------------------------------------------
 
-        bookings = self.booking_service.get_user_bookings(
-            user_id=user_id
-        )
+        if booking_domain == "hotel":
 
+            bookings = (
+                self.hotel_booking_service.get_user_bookings(
+                    user_id=user_id
+                )
+            )
+
+        elif booking_domain == "transport":
+
+            bookings = (
+                self.booking_service.get_user_bookings(
+                    user_id=user_id
+                )
+            )
+
+        else:
+            # ----------------------------------------------------
+            # Generic "Show my bookings"
+            #
+            # For now we keep the existing transport behavior.
+            # Later we can merge hotel + transport bookings into
+            # one unified booking history response.
+            # ----------------------------------------------------
+
+            # --------------------------------------------------------
+            # Retrieve bookings based on booking domain
+            # --------------------------------------------------------
+
+            if booking_domain == "hotel":
+
+                bookings = (
+                    self.hotel_booking_service.get_user_bookings(
+                        user_id=user_id
+                    )
+                )
+
+            else:
+                # transport OR unknown
+                #
+                # Keep the existing transport behavior for now.
+                bookings = (
+                    self.booking_service.get_user_bookings(
+                        user_id=user_id
+                    )
+                )
+
+        # --------------------------------------------------------
+        # HOTEL BOOKINGS
+        # --------------------------------------------------------
+
+        if booking_domain == "hotel":
+
+            if not bookings:
+                return {
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                "You don't have any hotel "
+                                "bookings yet."
+                            )
+                        )
+                    ]
+                }
+
+            lines = [
+                "Here are your hotel bookings:",
+                "",
+            ]
+
+            for index, booking in enumerate(
+                bookings,
+                start=1,
+            ):
+                lines.extend(
+                    [
+                        (
+                            f"{index}. Booking ID: "
+                            f"{booking.booking_id}"
+                        ),
+                        (
+                            f"   Hotel: "
+                            f"{booking.hotel_name}"
+                        ),
+                        (
+                            f"   Provider: "
+                            f"{booking.provider}"
+                        ),
+                        (
+                            f"   Destination: "
+                            f"{booking.destination}"
+                        ),
+                        (
+                            f"   Check-in: "
+                            f"{booking.check_in_date}"
+                        ),
+                        (
+                            f"   Check-out: "
+                            f"{booking.check_out_date}"
+                        ),
+                        (
+                            f"   Travellers: "
+                            f"{booking.travellers}"
+                        ),
+                        (
+                            f"   Nights: "
+                            f"{booking.nights}"
+                        ),
+                        (
+                            f"   Price per night: "
+                            f"{booking.price_per_night} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Total: "
+                            f"{booking.total_price} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Status: "
+                            f"{booking.status}"
+                        ),
+                        (
+                            f"   Created: "
+                            f"{booking.created_at}"
+                        ),
+                        "",
+                    ]
+                )
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content="\n".join(lines)
+                    )
+                ]
+            }
+
+        # --------------------------------------------------------
+        # HOTEL BOOKINGS
+        # --------------------------------------------------------
+
+        if booking_domain == "hotel":
+
+            if not bookings:
+                return {
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                "You don't have any hotel "
+                                "bookings yet."
+                            )
+                        )
+                    ]
+                }
+
+            lines = [
+                "Here are your hotel bookings:",
+                "",
+            ]
+
+            for index, booking in enumerate(
+                bookings,
+                start=1,
+            ):
+                lines.extend(
+                    [
+                        (
+                            f"{index}. Booking ID: "
+                            f"{booking.booking_id}"
+                        ),
+                        (
+                            f"   Hotel: "
+                            f"{booking.hotel_name}"
+                        ),
+                        (
+                            f"   Provider: "
+                            f"{booking.provider}"
+                        ),
+                        (
+                            f"   Destination: "
+                            f"{booking.destination}"
+                        ),
+                        (
+                            f"   Check-in: "
+                            f"{booking.check_in_date}"
+                        ),
+                        (
+                            f"   Check-out: "
+                            f"{booking.check_out_date}"
+                        ),
+                        (
+                            f"   Travellers: "
+                            f"{booking.travellers}"
+                        ),
+                        (
+                            f"   Nights: "
+                            f"{booking.nights}"
+                        ),
+                        (
+                            f"   Price per night: "
+                            f"{booking.price_per_night} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Total: "
+                            f"{booking.total_price} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Status: "
+                            f"{booking.status}"
+                        ),
+                        (
+                            f"   Created: "
+                            f"{booking.created_at}"
+                        ),
+                        "",
+                    ]
+                )
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content="\n".join(lines)
+                    )
+                ]
+            }
+        
         # --------------------------------------------------------
         # No bookings found
         # --------------------------------------------------------
@@ -1349,12 +2010,101 @@ class TravelAgentGraph:
 
         try:
 
-            cancelled_booking = (
-                self.booking_service.cancel_booking(
-                    booking_id=booking_id,
-                    user_id=user_id,
+            # ------------------------------------------------
+            # First determine whether this is a hotel booking.
+            #
+            # Hotel and transport booking IDs intentionally use
+            # the same BOOK-... format, so we must NOT decide
+            # the domain from the booking ID itself.
+            #
+            # The application checks the hotel booking store
+            # first. If the booking exists there, the hotel
+            # service handles cancellation.
+            # Otherwise the transport booking service handles it.
+            # ------------------------------------------------
+
+            try:
+
+                hotel_booking = (
+                    self.hotel_booking_service.get_booking(
+                        booking_id=booking_id,
+                    )
                 )
-            )
+
+            except ValueError:
+
+                hotel_booking = None
+
+            # ------------------------------------------------
+            # Hotel booking
+            # ------------------------------------------------
+
+            if hotel_booking:
+
+                cancelled_booking = (
+                    self.hotel_booking_service.cancel_booking(
+                        booking_id=booking_id,
+                        user_id=user_id,
+                    )
+                )
+
+                message = (
+                    "Your hotel booking has been "
+                    "cancelled successfully.\n\n"
+                    f"Booking ID: "
+                    f"{cancelled_booking.booking_id}\n"
+                    f"Hotel: "
+                    f"{cancelled_booking.hotel_name}\n"
+                    f"Provider: "
+                    f"{cancelled_booking.provider}\n"
+                    f"Destination: "
+                    f"{cancelled_booking.destination}\n"
+                    f"Check-in: "
+                    f"{cancelled_booking.check_in_date}\n"
+                    f"Check-out: "
+                    f"{cancelled_booking.check_out_date}\n"
+                    f"Travellers: "
+                    f"{cancelled_booking.travellers}\n"
+                    f"Nights: "
+                    f"{cancelled_booking.nights}\n"
+                    f"Total: "
+                    f"{cancelled_booking.total_price} "
+                    f"{cancelled_booking.currency}\n"
+                    f"Status: "
+                    f"{cancelled_booking.status}"
+                )
+
+            # ------------------------------------------------
+            # Transport booking
+            # ------------------------------------------------
+
+            else:
+
+                cancelled_booking = (
+                    self.booking_service.cancel_booking(
+                        booking_id=booking_id,
+                        user_id=user_id,
+                    )
+                )
+
+                message = (
+                    "Your booking has been "
+                    "cancelled successfully.\n\n"
+                    f"Booking ID: "
+                    f"{cancelled_booking.booking_id}\n"
+                    f"Option: "
+                    f"{cancelled_booking.option_id}\n"
+                    f"Mode: "
+                    f"{cancelled_booking.mode}\n"
+                    f"From: "
+                    f"{cancelled_booking.origin}\n"
+                    f"To: "
+                    f"{cancelled_booking.destination}\n"
+                    f"Travellers: "
+                    f"{cancelled_booking.travellers}\n"
+                    f"Status: "
+                    f"{cancelled_booking.status}"
+                )
 
         except PermissionError:
 
@@ -1392,20 +2142,6 @@ class TravelAgentGraph:
                 ]
             }
 
-        # ----------------------------------------------------
-        # Build success response
-        # ----------------------------------------------------
-
-        message = (
-            "Your booking has been cancelled successfully.\n\n"
-            f"Booking ID: {cancelled_booking.booking_id}\n"
-            f"Option: {cancelled_booking.option_id}\n"
-            f"Mode: {cancelled_booking.mode}\n"
-            f"From: {cancelled_booking.origin}\n"
-            f"To: {cancelled_booking.destination}\n"
-            f"Travellers: {cancelled_booking.travellers}\n"
-            f"Status: {cancelled_booking.status}"
-        )
 
         return {
             "messages": [
@@ -1462,6 +2198,7 @@ class TravelAgentGraph:
             # IMPORTANT:
             # Keep the confirmation pending.
             "pending_booking_confirmation": True,
+            "pending_booking_domain": "transport",
         }
 
     # ========================================================
@@ -1484,6 +2221,21 @@ class TravelAgentGraph:
             "selected_option_id"
         )
 
+        pending_domain = state.get(
+            "pending_booking_domain"
+        )
+
+        if pending_domain == "hotel":
+            message = (
+                "Hotel booking cancelled.\n\n"
+                f"Selected hotel: {selected_option_id}"
+            )
+        else:
+            message = (
+                "Booking cancelled.\n\n"
+                f"Selected option: {selected_option_id}"
+            )
+
         return {
             "messages": [
                 AIMessage(
@@ -1494,13 +2246,13 @@ class TravelAgentGraph:
             # No pending booking confirmation remains.
             "pending_booking_confirmation": False,
 
-            # Clear selected transport option.
+            # Clear booking domain.
+            "pending_booking_domain": None,
+
+            # Clear selected option.
             "selected_option_id": None,
 
-            # IMPORTANT:
-            # The database booking has been cancelled.
-            # Do not keep the old confirmed booking
-            # inside the current workflow state.
+            # Do not keep an old booking inside current workflow state.
             "booking": None,
         }
 
@@ -1925,17 +2677,48 @@ unsupported information.
     ):
         """
         Execute tools requested by the latest AI message.
+
+        Responsibilities:
+        - Execute every requested tool through ToolExecutor.
+        - Preserve previously discovered transport options.
+        - Preserve previously discovered hotel options.
+        - Capture new transport search results.
+        - Capture new hotel search results.
+        - Return tool messages and updated application state.
+
+        IMPORTANT:
+        - Tools perform searches/data retrieval.
+        - This node does NOT perform bookings.
+        - Booking execution is handled by dedicated booking nodes.
         """
 
+        # ========================================================
+        # 1. Get the latest AI message
+        # ========================================================
+
         last_message = state["messages"][-1]
+
+        # ========================================================
+        # 2. Build trusted tool context
+        # ========================================================
 
         tool_context = self._build_tool_context(
             state
         )
 
+        # ========================================================
+        # 3. Prepare tool messages
+        # ========================================================
+
         tool_messages = []
 
-        # Preserve previously discovered options.
+        # ========================================================
+        # 4. Preserve previously discovered transport options
+        #
+        # These may have been found in a previous tool call
+        # and are required later for booking.
+        # ========================================================
+
         transport_options = list(
             state.get(
                 "transport_options",
@@ -1943,15 +2726,43 @@ unsupported information.
             )
         )
 
+        # ========================================================
+        # 5. Preserve previously discovered hotel options
+        #
+        # These are required when the user says:
+        #
+        #     "Book HOTEL-2"
+        #
+        # on a later turn.
+        # ========================================================
+
+        hotel_options = list(
+            state.get(
+                "hotel_options",
+                [],
+            )
+        )
+
+        # ========================================================
+        # 6. Execute every requested tool
+        # ========================================================
+
         for tool_call in last_message.tool_calls:
+
+            # ----------------------------------------------------
+            # Copy tool arguments
+            # ----------------------------------------------------
 
             tool_args = dict(
                 tool_call["args"]
             )
 
-            # ------------------------------------------------
-            # Add canonical destination
-            # ------------------------------------------------
+            # ----------------------------------------------------
+            # Add canonical/resolved destination
+            #
+            # This allows tools to receive the trusted destination
+            # resolved by the application.
+            # ----------------------------------------------------
 
             if tool_context.resolved_destination:
 
@@ -1963,10 +2774,18 @@ unsupported information.
                     .model_dump()
                 )
 
+            # ----------------------------------------------------
+            # Build enriched tool call
+            # ----------------------------------------------------
+
             enriched_tool_call = {
                 **tool_call,
                 "args": tool_args,
             }
+
+            # ----------------------------------------------------
+            # Execute tool through generic ToolExecutor
+            # ----------------------------------------------------
 
             tool_message = (
                 self.tool_executor.execute(
@@ -1974,15 +2793,105 @@ unsupported information.
                 )
             )
 
+            # ----------------------------------------------------
+            # Store tool response
+            # ----------------------------------------------------
+
             tool_messages.append(
                 tool_message
             )
 
-            # ------------------------------------------------
-            # Capture transport options
-            # ------------------------------------------------
+            # ====================================================
+            # 7. Identify which tool was executed
+            # ====================================================
 
             tool_name = tool_call["name"]
+
+            # ====================================================
+            # 8. Capture HOTEL search results
+            #
+            # IMPORTANT:
+            #
+            # This must NOT be inside the transport-tool
+            # condition.
+            #
+            # search_hotels is a separate tool.
+            # ====================================================
+
+            if tool_name == "search_hotels":
+
+                result = tool_message.content
+
+                try:
+
+                    parsed_result = json.loads(
+                        result
+                    )
+
+                    if isinstance(
+                        parsed_result,
+                        list,
+                    ):
+
+                        for option in parsed_result:
+
+                            # ------------------------------------
+                            # Ignore invalid items
+                            # ------------------------------------
+
+                            if not isinstance(
+                                option,
+                                dict,
+                            ):
+                                continue
+
+                            # ------------------------------------
+                            # Get stable hotel ID
+                            # ------------------------------------
+
+                            hotel_id = option.get(
+                                "hotel_id"
+                            )
+
+                            # ------------------------------------
+                            # Save only if we have a valid ID
+                            # and it does not already exist.
+                            # ------------------------------------
+
+                            if (
+                                hotel_id
+                                and not any(
+                                    existing.get(
+                                        "hotel_id"
+                                    )
+                                    == hotel_id
+                                    for existing
+                                    in hotel_options
+                                )
+                            ):
+
+                                hotel_options.append(
+                                    option
+                                )
+
+                except (
+                    json.JSONDecodeError,
+                    TypeError,
+                ):
+
+                    # Do not crash the workflow because a tool
+                    # returned malformed/non-JSON content.
+                    pass
+
+            # ====================================================
+            # 9. Capture TRANSPORT search results
+            #
+            # Supported tools:
+            #
+            # - search_flights
+            # - search_trains
+            # - search_buses
+            # ====================================================
 
             if tool_name in {
                 "search_flights",
@@ -2005,17 +2914,30 @@ unsupported information.
 
                         for option in parsed_result:
 
+                            # ------------------------------------
+                            # Ignore invalid items
+                            # ------------------------------------
+
                             if not isinstance(
                                 option,
                                 dict,
                             ):
                                 continue
 
-                            option_id = (
-                                option.get(
-                                    "option_id"
-                                )
+                            # ------------------------------------
+                            # Get stable transport option ID
+                            # ------------------------------------
+
+                            option_id = option.get(
+                                "option_id"
                             )
+
+                            # ------------------------------------
+                            # Save only if:
+                            #
+                            # 1. option_id exists
+                            # 2. option is not already stored
+                            # ------------------------------------
 
                             if (
                                 option_id
@@ -2037,15 +2959,31 @@ unsupported information.
                     json.JSONDecodeError,
                     TypeError,
                 ):
-                    # Malformed tool output should not
-                    # crash the entire workflow.
+
+                    # Do not crash the workflow because a tool
+                    # returned malformed/non-JSON content.
                     pass
+
+        # ========================================================
+        # 10. Return updated state
+        #
+        # IMPORTANT:
+        #
+        # hotel_options MUST be returned here.
+        # Otherwise LangGraph will not persist the new hotel
+        # search results into the graph state.
+        # ========================================================
 
         return {
             "messages": tool_messages,
+
             "tool_context": tool_context,
+
             "transport_options": transport_options,
+
+            "hotel_options": hotel_options,
         }
+    
 
     # ========================================================
     # PUBLIC RUN METHOD
@@ -2163,23 +3101,36 @@ unsupported information.
             ),
 
             # ------------------------------------------------
+            # Preserve previous hotel options.
+            # ------------------------------------------------
+
+            "hotel_options": (
+                workflow_state.get(
+                    "hotel_options",
+                    [],
+                )
+            ),
+
+            # ------------------------------------------------
+            # Restore previous booking confirmation state.
+            # ------------------------------------------------
+
+            "pending_booking_confirmation": workflow_state.get(
+                "pending_booking_confirmation",
+                False,
+            ),
+
+            "pending_booking_domain": workflow_state.get(
+                "pending_booking_domain"
+            ),
+
+            # ------------------------------------------------
             # IMPORTANT:
             # Restore previous selected option.
             # ------------------------------------------------
 
             "selected_option_id": (
                 previous_selected_option_id
-            ),
-
-            # ------------------------------------------------
-            # Preserve pending confirmation state.
-            # ------------------------------------------------
-
-            "pending_booking_confirmation": (
-                workflow_state.get(
-                    "pending_booking_confirmation",
-                    False,
-                )
             ),
 
             # ------------------------------------------------
@@ -2198,6 +3149,7 @@ unsupported information.
         result = self.graph.invoke(
             initial_state
         )
+        
 
         # ----------------------------------------------------
         # Persist workflow state
@@ -2229,6 +3181,11 @@ unsupported information.
                     []
                 ),
 
+                "hotel_options": result.get(
+                    "hotel_options",
+                    [],
+                ),
+
                 "selected_option_id": result.get(
                     "selected_option_id"
                 ),
@@ -2238,9 +3195,14 @@ unsupported information.
                     False
                 ),
 
+                "pending_booking_domain": result.get(
+                    "pending_booking_domain"
+                ),
+
                 "booking": result.get(
                     "booking"
                 ),
+                
             },
         )
 
@@ -2300,6 +3262,11 @@ unsupported information.
                 [],
             ),
 
+            "hotel_options": result.get(
+                "hotel_options",
+                [],
+            ),
+
             "selected_option_id": result.get(
                 "selected_option_id"
             ),
@@ -2311,7 +3278,10 @@ unsupported information.
                 )
             ),
 
-            # NEW:
+            "pending_booking_domain": result.get(
+                "pending_booking_domain"
+            ),
+
             "booking": result.get(
                 "booking"
             ),
