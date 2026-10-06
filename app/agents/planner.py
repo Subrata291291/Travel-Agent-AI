@@ -17,17 +17,9 @@ class PlannerAgent:
         memory_context: dict | None = None,
     ) -> TravelPlan:
 
-        llm = (
-            self.llm_router
-            .get_primary_llm()
-        )
-
-        structured_llm = (
-            llm.with_structured_output(
-                TravelPlan,
-                method="json_schema",
-            )
-        )
+        # ----------------------------------------------------
+        # Default memory context
+        # ----------------------------------------------------
 
         if memory_context is None:
             memory_context = {
@@ -36,11 +28,19 @@ class PlannerAgent:
                 "resolved_destination": None,
             }
 
+        # ----------------------------------------------------
+        # Resolved destination
+        # ----------------------------------------------------
+
         resolved_destination = (
             memory_context.get(
                 "resolved_destination"
             )
         )
+
+        # ----------------------------------------------------
+        # Planner prompt
+        # ----------------------------------------------------
 
         prompt = f"""
 You are the planning layer of a professional
@@ -49,6 +49,18 @@ travel AI agent.
 Create an execution plan from the structured
 travel request, resolved destination, and
 relevant memory.
+
+IMPORTANT OUTPUT FORMAT:
+
+Return the result as valid JSON.
+
+The JSON must match the TravelPlan schema.
+
+Do not return:
+- markdown
+- explanations
+- plain text
+- additional fields outside the schema
 
 RULES:
 
@@ -101,6 +113,7 @@ RULES:
     - create the clarification task first.
 
 18. For transportation planning:
+
     - If transport_mode is "flight",
       create a transport task specifically
       for flight options.
@@ -119,6 +132,7 @@ RULES:
 
     - If transport_mode is "unknown",
       do not assume a transportation mode.
+
       Create a general transport task only when
       transportation planning is relevant to
       the user's request.
@@ -127,10 +141,80 @@ RULES:
       transport_mode is "unknown".
 
 19. For "check_weather" requests:
+
     - If the user asks for current weather,
       do NOT ask for travel dates.
+
     - If the user asks about weather during
       a future trip, dates may be required.
+
+20. The TravelPlan must always contain
+    a non-empty "goal".
+
+21. Every task MUST use a task_type value
+    supported by the TravelTask schema.
+
+22. Allowed task_type values are ONLY:
+
+    - "clarify"
+    - "weather"
+    - "transport"
+    - "hotel"
+    - "restaurant"
+    - "itinerary"
+    - "budget_check"
+    - "other"
+
+23. For hotel search or hotel availability
+    requests, use:
+
+    task_type = "hotel"
+
+    NEVER use:
+    - "hotel_search"
+    - "search_hotel"
+    - "hotel_booking"
+
+24. For flight, train, bus, or general
+    transportation search requests, use:
+
+    task_type = "transport"
+
+    NEVER create task types such as:
+    - "flight_search"
+    - "train_search"
+    - "bus_search"
+
+25. For weather requests, use:
+
+    task_type = "weather"
+
+26. For restaurant requests, use:
+
+    task_type = "restaurant"
+
+27. For itinerary planning, use:
+
+    task_type = "itinerary"
+
+28. For budget-related validation, use:
+
+    task_type = "budget_check"
+
+29. For clarification, use:
+
+    task_type = "clarify"
+
+30. The output must contain the exact field
+    name "task_type" for every task.
+
+    Do NOT use "type".
+
+31. The output must contain the "goal" field
+    at the top level of the TravelPlan.
+
+32. Do not create additional task_type values
+    outside the allowed list.
 
 STRUCTURED USER REQUEST:
 
@@ -144,9 +228,56 @@ MEMORY CONTEXT:
 
 {memory_context}
 
+OUTPUT CONTRACT:
+
+Return a JSON object matching the TravelPlan schema.
+
+The top-level object MUST contain:
+
+{{
+    "goal": "...",
+    "needs_clarification": false,
+    "clarification_questions": [],
+    "tasks": []
+}}
+
+Every task MUST contain:
+
+{{
+    "task_id": "...",
+    "task_type": "...",
+    "description": "...",
+    "required": true,
+    "depends_on": []
+}}
+
+IMPORTANT:
+
+- Use "task_type", never "type".
+- Use only the allowed task_type values.
+- For hotel work, use "hotel".
+- For transport work, use "transport".
+- For weather work, use "weather".
+- For restaurant work, use "restaurant".
+- For itinerary work, use "itinerary".
+- For clarification, use "clarify".
+- Always provide a non-empty "goal".
+- Return JSON only.
+- Do not return markdown.
+- Do not return explanations outside the JSON object.
+
 Create the travel execution plan.
 """
 
-        return structured_llm.invoke(
-            prompt
+        # ----------------------------------------------------
+        # Generate structured TravelPlan through the
+        # centralized LLM router.
+        #
+        # The router handles provider fallback:
+        # Groq → OpenRouter → Gemini → OpenAI
+        # ----------------------------------------------------
+
+        return self.llm_router.invoke_structured(
+            prompt=prompt,
+            schema=TravelPlan,
         )

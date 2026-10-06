@@ -1663,14 +1663,28 @@ class TravelAgentGraph:
                 )
 
             else:
-                # transport OR unknown
+                # --------------------------------------------------------
+                # UNKNOWN DOMAIN
                 #
-                # Keep the existing transport behavior for now.
-                bookings = (
+                # "Show my bookings" means all booking domains.
+                #
+                # We intentionally keep transport and hotel tables
+                # separate. The graph aggregates them here.
+                # --------------------------------------------------------
+
+                transport_bookings = (
                     self.booking_service.get_user_bookings(
                         user_id=user_id
                     )
                 )
+
+                hotel_bookings = (
+                    self.hotel_booking_service.get_user_bookings(
+                        user_id=user_id
+                    )
+                )
+
+                bookings = transport_bookings + hotel_bookings
 
         # --------------------------------------------------------
         # HOTEL BOOKINGS
@@ -1870,8 +1884,28 @@ class TravelAgentGraph:
             }
 
         # --------------------------------------------------------
-        # Format bookings
+        # Format combined bookings
+        #
+        # This branch is used when booking_domain == "unknown".
+        #
+        # In that case, bookings contains both:
+        #   1. Transport bookings
+        #   2. Hotel bookings
+        #
+        # The two database models remain separate.
+        # We only combine their responses at the presentation layer.
         # --------------------------------------------------------
+
+        if not bookings:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "You don't have any bookings yet."
+                        )
+                    )
+                ]
+            }
 
         lines = [
             "Here are your bookings:",
@@ -1882,25 +1916,135 @@ class TravelAgentGraph:
             bookings,
             start=1,
         ):
+
+            # ----------------------------------------------------
+            # HOTEL BOOKING
+            # ----------------------------------------------------
+
+            if hasattr(booking, "hotel_id"):
+
+                lines.extend(
+                    [
+                        (
+                            f"{index}. Booking ID: "
+                            f"{booking.booking_id}"
+                        ),
+                        (
+                            f"   Type: Hotel"
+                        ),
+                        (
+                            f"   Hotel: "
+                            f"{booking.hotel_name}"
+                        ),
+                        (
+                            f"   Provider: "
+                            f"{booking.provider}"
+                        ),
+                        (
+                            f"   Destination: "
+                            f"{booking.destination}"
+                        ),
+                        (
+                            f"   Check-in: "
+                            f"{booking.check_in_date}"
+                        ),
+                        (
+                            f"   Check-out: "
+                            f"{booking.check_out_date}"
+                        ),
+                        (
+                            f"   Travellers: "
+                            f"{booking.travellers}"
+                        ),
+                        (
+                            f"   Nights: "
+                            f"{booking.nights}"
+                        ),
+                        (
+                            f"   Price per night: "
+                            f"{booking.price_per_night} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Total: "
+                            f"{booking.total_price} "
+                            f"{booking.currency}"
+                        ),
+                        (
+                            f"   Status: "
+                            f"{booking.status}"
+                        ),
+                        (
+                            f"   Created: "
+                            f"{booking.created_at}"
+                        ),
+                        "",
+                    ]
+                )
+
+                continue
+
+            # ----------------------------------------------------
+            # TRANSPORT BOOKING
+            # ----------------------------------------------------
+
             lines.extend(
                 [
-                    f"{index}. Booking ID: {booking.booking_id}",
-                    f"   Option: {booking.option_id}",
-                    f"   Mode: {booking.mode}",
-                    f"   Provider: {booking.provider}",
-                    f"   From: {booking.origin}",
-                    f"   To: {booking.destination}",
-                    f"   Travellers: {booking.travellers}",
+                    (
+                        f"{index}. Booking ID: "
+                        f"{booking.booking_id}"
+                    ),
+                    (
+                        f"   Type: Transport"
+                    ),
+                    (
+                        f"   Option: "
+                        f"{booking.option_id}"
+                    ),
+                    (
+                        f"   Mode: "
+                        f"{booking.mode}"
+                    ),
+                    (
+                        f"   Provider: "
+                        f"{booking.provider}"
+                    ),
+                    (
+                        f"   From: "
+                        f"{booking.origin}"
+                    ),
+                    (
+                        f"   To: "
+                        f"{booking.destination}"
+                    ),
+                    (
+                        f"   Travellers: "
+                        f"{booking.travellers}"
+                    ),
                     (
                         f"   Total: "
                         f"{booking.total_price} "
                         f"{booking.currency}"
                     ),
-                    f"   Status: {booking.status}",
-                    f"   Created: {booking.created_at}",
+                    (
+                        f"   Status: "
+                        f"{booking.status}"
+                    ),
+                    (
+                        f"   Created: "
+                        f"{booking.created_at}"
+                    ),
                     "",
                 ]
             )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content="\n".join(lines)
+                )
+            ]
+        }
 
         return {
             "messages": [
