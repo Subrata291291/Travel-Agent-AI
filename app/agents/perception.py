@@ -103,6 +103,47 @@ class PerceptionAgent:
             for phrase in booking_history_phrases
         )
 
+
+    def _is_get_booking_details_request(
+        self,
+        user_message: str,
+    ) -> bool:
+        """
+        Detect whether the user wants details of
+        one specific existing booking.
+
+        This is deterministic because booking IDs are
+        structured identifiers and should not depend
+        on LLM interpretation.
+        """
+
+        text = user_message.strip().lower()
+
+        booking_id = self._extract_booking_id(
+            user_message
+        )
+
+        if not booking_id:
+            return False
+
+        detail_phrases = [
+            "show details",
+            "show detail",
+            "booking details",
+            "booking detail",
+            "details of",
+            "detail of",
+            "view details",
+            "view detail",
+            "get details",
+            "get detail",
+        ]
+
+        return any(
+            phrase in text
+            for phrase in detail_phrases
+        )
+    
     # ==============================================================
     # DETERMINISTIC: BOOKING DOMAIN
     # ==============================================================
@@ -277,6 +318,39 @@ class PerceptionAgent:
 
         if conversation_history is None:
             conversation_history = []
+        
+                # ==========================================================
+        # APPLICATION-LEVEL: GET BOOKING DETAILS
+        # ==========================================================
+
+        if self._is_get_booking_details_request(
+            user_message
+        ):
+
+            booking_id = self._extract_booking_id(
+                user_message
+            )
+
+            booking_domain = self._detect_booking_domain(
+                user_message
+            )
+
+            return TripPerception(
+                intent="get_booking_details",
+                destination=None,
+                start_date=None,
+                end_date=None,
+                duration_days=None,
+                travellers=1,
+                budget=None,
+                currency="INR",
+                preferences=[],
+                transport_mode="unknown",
+                selected_option_id=None,
+                booking_id=booking_id,
+                booking_domain=booking_domain,
+                confirmation="unknown",
+            )
 
         # ==========================================================
         # APPLICATION-LEVEL: GET BOOKINGS

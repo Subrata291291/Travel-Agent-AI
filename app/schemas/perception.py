@@ -25,6 +25,7 @@ class TripPerception(BaseModel):
         "find_restaurant",
         "book_trip",
         "get_bookings",
+        "get_booking_details",
         "cancel_booking",
         "question",
         "other",
