@@ -25,6 +25,7 @@ class TripPerception(BaseModel):
         "find_restaurant",
         "book_trip",
         "get_bookings",
+        "cancel_booking",
         "question",
         "other",
     ] = Field(
@@ -139,6 +140,18 @@ class TripPerception(BaseModel):
             "Exact transport option ID selected by "
             "the user, such as FLIGHT-1, TRAIN-1, "
             "or BUS-1."
+        ),
+    )
+
+    # ========================================================
+    # EXISTING BOOKING
+    # ========================================================
+
+    booking_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Existing booking ID referenced by the user, "
+            "such as BOOK-29F06E436FF9."
         ),
     )
 

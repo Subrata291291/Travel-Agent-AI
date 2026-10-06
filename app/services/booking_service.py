@@ -40,7 +40,6 @@ class BookingService:
     # ========================================================
     # CREATE BOOKING
     # ========================================================
-
     def create_booking(
         self,
         request: BookingRequest,
@@ -196,6 +195,119 @@ class BookingService:
         finally:
             db.close()
 
+    # ========================================================
+    # CANCEL BOOKING
+    # ========================================================
+    def cancel_booking(
+        self,
+        booking_id: str,
+        user_id: str,
+    ) -> BookingResponse:
+        """
+        Cancel an existing booking.
+
+        Business rules:
+        - Booking must exist.
+        - Booking must belong to the current user.
+        - Booking must currently be confirmed.
+        - Cancellation is performed by the application,
+        never by the LLM.
+        """
+
+        db = SessionLocal()
+
+        try:
+            repository = BookingRepository(db)
+
+            # --------------------------------------------------
+            # 1. Find booking
+            # --------------------------------------------------
+
+            booking = repository.get_by_id(
+                booking_id
+            )
+
+            if not booking:
+                raise ValueError(
+                    f"Booking {booking_id} was not found."
+                )
+
+            # --------------------------------------------------
+            # 2. Ownership check
+            # --------------------------------------------------
+
+            if booking.user_id != user_id:
+                raise PermissionError(
+                    "You are not allowed to cancel this booking."
+                )
+
+            # --------------------------------------------------
+            # 3. Already cancelled?
+            # --------------------------------------------------
+
+            if booking.status == "cancelled":
+                raise ValueError(
+                    f"Booking {booking_id} is already cancelled."
+                )
+
+            # --------------------------------------------------
+            # 4. Only confirmed bookings can be cancelled
+            # --------------------------------------------------
+
+            if booking.status != "confirmed":
+                raise ValueError(
+                    f"Booking {booking_id} cannot be cancelled "
+                    f"because its current status is "
+                    f"{booking.status}."
+                )
+
+            # --------------------------------------------------
+            # 5. Change booking state
+            # --------------------------------------------------
+
+            booking.status = "cancelled"
+
+            # --------------------------------------------------
+            # 6. Persist transaction
+            # --------------------------------------------------
+
+            db.commit()
+            db.refresh(booking)
+
+            # --------------------------------------------------
+            # 7. Return stable application response
+            # --------------------------------------------------
+
+            return BookingResponse(
+                booking_id=booking.booking_id,
+                user_id=booking.user_id,
+                session_id=booking.session_id,
+                option_id=booking.option_id,
+                status=booking.status,
+                mode=booking.mode,
+                provider=booking.provider,
+                origin=booking.origin,
+                destination=booking.destination,
+                departure_time=booking.departure_time,
+                arrival_time=booking.arrival_time,
+                duration_minutes=booking.duration_minutes,
+                price=booking.price,
+                currency=booking.currency,
+                travellers=booking.travellers,
+                total_price=booking.total_price,
+                created_at=booking.created_at,
+            )
+
+        except Exception:
+            db.rollback()
+            raise
+
+        finally:
+            db.close()
+
+    # ========================================================
+    # GET USER BOOKINGS
+    # ========================================================
 
     def get_user_bookings(
         self,

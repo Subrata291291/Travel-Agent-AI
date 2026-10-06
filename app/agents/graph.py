@@ -10,6 +10,7 @@ from langchain_core.messages import (
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
+from app.agents import perception
 from app.agents.perception import PerceptionAgent
 from app.agents.planner import PlannerAgent
 from app.agents.executor import ToolExecutor
@@ -195,6 +196,11 @@ class TravelAgentGraph:
             self.get_bookings_node,
         )
 
+        graph.add_node(
+            "cancel_booking",
+            self.cancel_booking_node,
+        )
+
         # NEW:
         # Executes booking only after explicit confirmation.
         graph.add_node(
@@ -246,6 +252,7 @@ class TravelAgentGraph:
                 "new_booking": "booking_confirmation",
                 "execute_booking": "booking_execution",
                 "cancel_booking": "booking_cancel",
+                "cancel_existing_booking": "cancel_booking",
                 "wait_booking": "booking_waiting",
                 "destination": "destination_resolver",
                 "booking_already_exists": "booking_already_exists",
@@ -314,6 +321,11 @@ class TravelAgentGraph:
 
         graph.add_edge(
             "booking_cancel",
+            END,
+        )
+
+        graph.add_edge(
+            "cancel_booking",
             END,
         )
 
@@ -542,10 +554,12 @@ class TravelAgentGraph:
         Booking routing is deterministic.
 
         Priority:
-        1. Already confirmed booking
-        2. Pending booking confirmation
-        3. New booking request
-        4. Normal travel flow
+        1. Existing booking cancellation
+        2. Already confirmed booking
+        3. Pending booking confirmation
+        4. Get user bookings
+        5. New booking request
+        6. Normal travel flow
         """
 
         perception = state.get("perception")
@@ -553,48 +567,23 @@ class TravelAgentGraph:
         if not perception:
             return "destination"
 
-        # ====================================================
-        # CASE 1 — BOOKING ALREADY EXISTS
-        # ====================================================
-        #
-        # If this session already has a confirmed booking,
-        # do NOT start another booking flow.
-        #
-        # Example:
-        #
-        # Turn 4:
-        #   Yes, book it
-        #
-        # Turn 5:
-        #   Yes, book it
-        #
-        # Turn 5 must NOT create another booking.
-        # ====================================================
+        # CASE 1 — EXISTING BOOKING CANCELLATION
+        if perception.intent == "cancel_booking":
+            return "cancel_existing_booking"
 
+        # CASE 2 — BOOKING ALREADY EXISTS
         existing_booking = state.get("booking")
 
         if existing_booking:
+            confirmation = getattr(perception, "confirmation", "unknown")
+            intent = getattr(perception, "intent", None)
 
-            confirmation = getattr(
-                perception,
-                "confirmation",
-                "unknown",
-            )
-
-            intent = getattr(
-                perception,
-                "intent",
-                None,
-            )
-
-            if (
-                confirmation == "yes"
-                or intent == "book_trip"
-            ):
+            if confirmation == "yes" or intent == "book_trip":
                 return "booking_already_exists"
 
+
         # ====================================================
-        # CASE 2 — PENDING BOOKING
+        # CASE 3 — PENDING BOOKING
         # ====================================================
 
         pending_booking = state.get(
@@ -619,15 +608,14 @@ class TravelAgentGraph:
             return "wait_booking"
 
         # ====================================================
-        # CASE 3 — GET USER BOOKINGS
+        # CASE 4 — GET USER BOOKINGS
         # ====================================================
 
         if perception.intent == "get_bookings":
             return "get_bookings"
 
-
         # ====================================================
-        # CASE 4 — NEW BOOKING REQUEST
+        # CASE 5 — NEW BOOKING REQUEST
         # ====================================================
 
         if (
@@ -636,9 +624,8 @@ class TravelAgentGraph:
         ):
             return "new_booking"
 
-
         # ====================================================
-        # CASE 5 — NORMAL TRAVEL FLOW
+        # CASE 6 — NORMAL TRAVEL FLOW
         # ====================================================
 
         return "destination"
@@ -946,10 +933,16 @@ class TravelAgentGraph:
 
         return {
             "messages": [
-                AIMessage(content=message)
+                AIMessage(
+                    content=message
+                )
             ],
+
             "pending_booking_confirmation": False,
+
             "selected_option_id": None,
+
+            "booking": None,
         }
 
     def get_bookings_node(
@@ -1045,6 +1038,178 @@ class TravelAgentGraph:
                     content="\n".join(lines)
                 )
             ]
+        }
+
+    # ========================================================
+    # NODE — EXISTING BOOKING CANCELLATION
+    # ========================================================
+
+    def cancel_booking_node(
+        self,
+        state: TravelState,
+    ):
+        """
+        Cancel an already-created booking.
+
+        IMPORTANT:
+
+        This node performs a real database state change.
+
+        The LLM does not cancel the booking.
+
+        The perception layer only identifies:
+            intent = cancel_booking
+            booking_id = BOOK-...
+
+        This node calls BookingService, which performs:
+            - booking lookup
+            - ownership validation
+            - status validation
+            - database update
+            - commit
+        """
+
+        # ----------------------------------------------------
+        # Get current user
+        # ----------------------------------------------------
+
+        user_id = state.get("user_id")
+
+        if not user_id:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't determine your user "
+                            "account for this cancellation."
+                        )
+                    )
+                ]
+            }
+
+        # ----------------------------------------------------
+        # Get perception
+        # ----------------------------------------------------
+
+        perception = state.get("perception")
+
+        if not perception:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't understand which booking "
+                            "you want to cancel."
+                        )
+                    )
+                ]
+            }
+
+        # ----------------------------------------------------
+        # Get booking ID
+        # ----------------------------------------------------
+
+        booking_id = getattr(
+            perception,
+            "booking_id",
+            None,
+        )
+
+        # ----------------------------------------------------
+        # Booking ID missing
+        # ----------------------------------------------------
+
+        if not booking_id:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "Please provide the booking ID "
+                            "you want to cancel."
+                        )
+                    )
+                ]
+            }
+
+        # ----------------------------------------------------
+        # Execute cancellation
+        # ----------------------------------------------------
+
+        try:
+
+            cancelled_booking = (
+                self.booking_service.cancel_booking(
+                    booking_id=booking_id,
+                    user_id=user_id,
+                )
+            )
+
+        except PermissionError:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "You are not allowed to cancel "
+                            f"booking {booking_id}."
+                        )
+                    )
+                ]
+            }
+
+        except ValueError as exc:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=str(exc)
+                    )
+                ]
+            }
+
+        except Exception:
+
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I couldn't cancel the booking "
+                            "right now. Please try again."
+                        )
+                    )
+                ]
+            }
+
+        # ----------------------------------------------------
+        # Build success response
+        # ----------------------------------------------------
+
+        message = (
+            "Your booking has been cancelled successfully.\n\n"
+            f"Booking ID: {cancelled_booking.booking_id}\n"
+            f"Option: {cancelled_booking.option_id}\n"
+            f"Mode: {cancelled_booking.mode}\n"
+            f"From: {cancelled_booking.origin}\n"
+            f"To: {cancelled_booking.destination}\n"
+            f"Travellers: {cancelled_booking.travellers}\n"
+            f"Status: {cancelled_booking.status}"
+        )
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=message
+                )
+            ],
+
+            # No pending booking confirmation remains.
+            "pending_booking_confirmation": False,
+
+            # Clear selected transport option.
+            "selected_option_id": None,
         }
 
     # ========================================================

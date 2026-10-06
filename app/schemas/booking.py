@@ -45,6 +45,7 @@ class BookingResponse(BaseModel):
     status: Literal[
         "confirmed",
         "failed",
+        "cancelled",
     ]
 
     mode: str

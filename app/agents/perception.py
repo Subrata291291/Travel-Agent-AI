@@ -9,31 +9,17 @@ class PerceptionAgent:
     This layer understands what the user is asking for and converts
     the natural-language request into structured TripPerception data.
 
-    Example:
-
-        User:
-            "I want to go to Manali with my wife on 20 December."
-
-        Output:
-            intent = find_transport / plan_trip
-            destination = Manali
-            travellers = 2
-            start_date = 2026-12-20
-            etc.
-
     Important:
 
-    This agent does NOT perform the actual booking.
+    This agent does NOT perform booking or cancellation.
 
-    It only understands the user's request.
-
-    For booking conversations, it can also detect whether the
-    user explicitly confirmed or rejected a pending booking.
+    It only understands the user's request and produces structured
+    data for the application workflow.
     """
 
-    # ------------------------------------------------------------------
+    # ==============================================================
     # INITIALIZATION
-    # ------------------------------------------------------------------
+    # ==============================================================
 
     def __init__(self, llm_router: LLMRouter):
         """
@@ -45,36 +31,19 @@ class PerceptionAgent:
 
         self.llm_router = llm_router
 
-    # ------------------------------------------------------------------
-    # DETERMINISTIC APPLICATION-LEVEL INTENT DETECTION
-    # ------------------------------------------------------------------
+    # ==============================================================
+    # DETERMINISTIC: GET BOOKINGS
+    # ==============================================================
 
     def _is_get_bookings_request(self, user_message: str) -> bool:
         """
-        Detect requests to retrieve the current user's bookings.
+        Detect requests to retrieve the user's existing bookings.
 
-        This detection is intentionally deterministic.
+        This is intentionally deterministic because retrieving a
+        user's own booking history is an application-level command.
 
-        Why?
-
-        Retrieving a user's own booking history is an application-level
-        command. It should not depend entirely on probabilistic LLM
-        classification.
-
-        Example messages:
-
-            "Show my bookings"
-            "Show my booking"
-            "List my bookings"
-            "View my bookings"
-            "See my bookings"
-            "Get my bookings"
-            "Show my booking history"
-            "Can you show my previous bookings?"
-            "Do I have any bookings?"
-
-        If one of these patterns is detected, the perception layer
-        directly returns intent = "get_bookings".
+        We should not depend completely on probabilistic LLM
+        classification for this type of operation.
         """
 
         text = user_message.strip().lower()
@@ -109,9 +78,90 @@ class PerceptionAgent:
             for phrase in booking_history_phrases
         )
 
-    # ------------------------------------------------------------------
+    # ==============================================================
+    # DETERMINISTIC: CANCEL BOOKING
+    # ==============================================================
+
+    def _extract_booking_id(self, user_message: str) -> str | None:
+        """
+        Extract a booking ID from the user's message.
+
+        Expected booking ID format:
+
+            BOOK-29F06E436FF9
+
+        We intentionally keep this simple and strict.
+
+        The booking ID must:
+
+            - start with BOOK-
+            - contain the remaining identifier
+            - preserve the exact value
+
+        Returns:
+            Exact booking ID if found.
+            None otherwise.
+        """
+
+        import re
+
+        match = re.search(
+            r"\bBOOK-[A-Z0-9]+\b",
+            user_message.upper(),
+        )
+
+        if not match:
+            return None
+
+        return match.group(0)
+
+    def _is_cancel_booking_request(self, user_message: str) -> bool:
+        """
+        Detect whether the user is asking to cancel an existing booking.
+
+        This is deterministic because cancellation is an application
+        action with real consequences.
+
+        Examples:
+
+            "Cancel BOOK-29F06E436FF9"
+            "I want to cancel BOOK-29F06E436FF9"
+            "Please cancel my booking BOOK-29F06E436FF9"
+            "Cancel my booking"
+        """
+
+        text = user_message.strip().lower()
+
+        # A booking ID makes the short imperative "Cancel BOOK-…"
+        # an unambiguous cancellation request, even without "my booking".
+        if (
+            text.startswith("cancel ")
+            and self._extract_booking_id(user_message)
+        ):
+            return True
+
+        cancellation_phrases = [
+            "cancel booking",
+            "cancel my booking",
+            "cancel the booking",
+            "cancel this booking",
+            "cancel my reservation",
+            "cancel reservation",
+            "cancel this reservation",
+            "i want to cancel",
+            "i need to cancel",
+            "please cancel",
+            "can you cancel",
+        ]
+
+        return any(
+            phrase in text
+            for phrase in cancellation_phrases
+        )
+
+    # ==============================================================
     # MAIN PERCEPTION METHOD
-    # ------------------------------------------------------------------
+    # ==============================================================
 
     def understand(
         self,
@@ -123,39 +173,20 @@ class PerceptionAgent:
         a structured TripPerception object.
 
         Conversation history is provided so that short follow-up
-        messages such as:
-
-            "Himachal Pradesh"
-            "Book TRAIN-1"
-            "Yes, book it"
-
-        can be understood using previous conversation context.
+        messages can be understood using previous context.
         """
 
-        # If there is no previous conversation, use an empty list.
+        # ----------------------------------------------------------
+        # DEFAULT CONVERSATION HISTORY
+        # ----------------------------------------------------------
+
         if conversation_history is None:
             conversation_history = []
 
-        # ==============================================================
-        # IMPORTANT:
-        # DETERMINISTIC BOOKING HISTORY DETECTION
-        # ==============================================================
+        # ==========================================================
+        # APPLICATION-LEVEL: GET BOOKINGS
+        # ==========================================================
 
-        # Retrieving existing bookings is an application-level action.
-        #
-        # We do NOT want the LLM to randomly classify:
-        #
-        #     "Show my bookings"
-        #
-        # as:
-        #
-        #     "question"
-        #
-        # or:
-        #
-        #     "other"
-        #
-        # Therefore we detect it before calling the LLM.
         if self._is_get_bookings_request(user_message):
             return TripPerception(
                 intent="get_bookings",
@@ -169,12 +200,37 @@ class PerceptionAgent:
                 preferences=[],
                 transport_mode="unknown",
                 selected_option_id=None,
+                booking_id=None,
                 confirmation="unknown",
             )
 
-        # ==============================================================
+        # ==========================================================
+        # APPLICATION-LEVEL: CANCEL BOOKING
+        # ==========================================================
+
+        booking_id = self._extract_booking_id(user_message)
+
+        if self._is_cancel_booking_request(user_message):
+
+            return TripPerception(
+                intent="cancel_booking",
+                destination=None,
+                start_date=None,
+                end_date=None,
+                duration_days=None,
+                travellers=1,
+                budget=None,
+                currency="INR",
+                preferences=[],
+                transport_mode="unknown",
+                selected_option_id=None,
+                booking_id=booking_id,
+                confirmation="unknown",
+            )
+
+        # ==========================================================
         # LLM-BASED PERCEPTION
-        # ==============================================================
+        # ==========================================================
 
         prompt = f"""
 You are the perception layer of a professional travel AI agent.
@@ -230,6 +286,7 @@ Use ONLY one of these intents:
 - "find_restaurant"
 - "book_trip"
 - "get_bookings"
+- "cancel_booking"
 - "question"
 - "other"
 
@@ -285,6 +342,7 @@ For "get_bookings":
 - preferences = []
 - transport_mode = "unknown"
 - selected_option_id = null
+- booking_id = null
 - confirmation = "unknown"
 
 IMPORTANT:
@@ -293,8 +351,63 @@ IMPORTANT:
 
 It does NOT mean creating a new booking.
 
-Never set intent = "book_trip" merely because the user
-mentions the word "booking" or "bookings".
+
+CANCEL BOOKING RULES:
+
+If the user wants to cancel an existing booking:
+
+- Set intent = "cancel_booking".
+
+- Extract the exact booking ID when provided.
+
+- Store the booking ID in booking_id.
+
+- Preserve the exact booking ID.
+
+- Do not confuse booking_id with selected_option_id.
+
+- Do not invent a booking ID.
+
+Examples:
+
+User:
+"Cancel BOOK-29F06E436FF9"
+
+Output:
+
+intent = "cancel_booking"
+booking_id = "BOOK-29F06E436FF9"
+
+
+User:
+"I want to cancel my booking BOOK-29F06E436FF9"
+
+Output:
+
+intent = "cancel_booking"
+booking_id = "BOOK-29F06E436FF9"
+
+
+User:
+"Please cancel BOOK-29F06E436FF9"
+
+Output:
+
+intent = "cancel_booking"
+booking_id = "BOOK-29F06E436FF9"
+
+
+IMPORTANT:
+
+The perception layer does NOT cancel the booking.
+
+It only identifies the cancellation request.
+
+Never claim that the booking has already been cancelled.
+
+If the user asks to cancel a booking but does not provide
+a booking ID, keep booking_id = null and let the application
+handle clarification.
 
 
 TRANSPORT SEARCH RULES:
@@ -362,7 +475,6 @@ Valid option IDs may look like:
 Examples:
 
 User:
-
 "Book TRAIN-1"
 
 Output:
@@ -372,7 +484,6 @@ selected_option_id = "TRAIN-1"
 
 
 User:
-
 "I want FLIGHT-1"
 
 Output:
@@ -382,7 +493,6 @@ selected_option_id = "FLIGHT-1"
 
 
 User:
-
 "Book BUS-1"
 
 Output:
@@ -636,6 +746,7 @@ The JSON object must contain exactly these fields:
 - preferences
 - transport_mode
 - selected_option_id
+- booking_id
 - confirmation
 
 
@@ -650,6 +761,7 @@ intent must be one of:
 - "find_restaurant"
 - "book_trip"
 - "get_bookings"
+- "cancel_booking"
 - "question"
 - "other"
 
@@ -672,6 +784,19 @@ selected_option_id:
   selects a previously displayed transport option.
 
 - Never invent an option ID.
+
+
+booking_id:
+
+- Must be null when the user is not referring
+  to an existing booking.
+
+- Must contain the exact booking ID when the user
+  refers to an existing booking.
+
+- Never invent a booking ID.
+
+- Never confuse booking_id with selected_option_id.
 
 
 confirmation must be one of:
@@ -702,6 +827,12 @@ UNKNOWN VALUES:
 - transport_mode should be "unknown" when no transport mode
   is specified.
 
+- selected_option_id should be null when no transport option
+  is selected.
+
+- booking_id should be null when no existing booking
+  is referenced.
+
 - confirmation should be "unknown" when there is no explicit
   booking confirmation or rejection.
 
@@ -711,17 +842,11 @@ Currency:
   another currency.
 """
 
-        # ==============================================================
+        # ==========================================================
         # STRUCTURED LLM CALL
-        # ==============================================================
+        # ==========================================================
 
-        # Ask the LLM router to generate structured output.
-        #
-        # IMPORTANT:
-        #
-        # We intentionally do NOT call get_primary_llm() here.
-        #
-        # invoke_structured() handles provider fallback:
+        # invoke_structured() is responsible for provider fallback:
         #
         # Groq
         #   ↓ failure
@@ -730,9 +855,6 @@ Currency:
         # Gemini
         #   ↓ failure
         # OpenAI
-        #
-        # This means a Groq 401/429 error does not
-        # automatically stop the perception layer.
 
         result = self.llm_router.invoke_structured(
             prompt,
