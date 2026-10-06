@@ -1,3 +1,4 @@
+from email import message
 from typing import Annotated, TypedDict
 import json
 
@@ -66,6 +67,8 @@ class TravelState(TypedDict):
     pending_destination: str | None
 
     tool_context: ToolContext | None
+
+    trip_context: dict | None
 
     # Transport options discovered in previous turns.
     transport_options: list[dict]
@@ -378,6 +381,31 @@ class TravelAgentGraph:
 
         return graph.compile()
 
+
+    def _build_trip_context(
+        self,
+        perception,
+    ) -> dict:
+        """
+        Convert structured perception into a serializable
+        workflow context.
+
+        This is application state, not conversation memory.
+        """
+
+        return {
+            "intent": perception.intent,
+            "destination": perception.destination,
+            "start_date": perception.start_date,
+            "end_date": perception.end_date,
+            "duration_days": perception.duration_days,
+            "travellers": perception.travellers,
+            "budget": perception.budget,
+            "currency": perception.currency,
+            "preferences": perception.preferences,
+            "transport_mode": perception.transport_mode,
+        }
+
     # ========================================================
     # NODE 1 — PERCEPTION
     # ========================================================
@@ -387,20 +415,201 @@ class TravelAgentGraph:
         state: TravelState,
     ):
         """
-        Understand the current user message.
+        Understand the current user message and merge it with
+        previously stored trip context when this is a continuation.
+
+        Important:
+        The LLM is responsible for understanding the current message,
+        but deterministic Python logic is responsible for preserving
+        already-known trip information.
+
+        This prevents a short clarification such as:
+
+            "Manali, Himachal Pradesh, India"
+
+        from accidentally resetting:
+
+            date = 2026-12-20
+            travellers = 2
+            transport = train
         """
+
+        # --------------------------------------------------------
+        # 1. Get conversation history
+        # --------------------------------------------------------
 
         conversation_history = self.memory.get_messages(
             state["session_id"]
         )
 
-        perception = self.perception_agent.understand(
+        # --------------------------------------------------------
+        # 2. Let the LLM understand the CURRENT message
+        # --------------------------------------------------------
+
+        current = self.perception_agent.understand(
             state["user_message"],
             conversation_history,
         )
 
+        # --------------------------------------------------------
+        # 3. Load previously saved trip context
+        # --------------------------------------------------------
+
+        previous = state.get("trip_context") or {}
+
+        # --------------------------------------------------------
+        # 4. Decide whether this is a continuation
+        #
+        # If there is an active clarification, definitely merge.
+        #
+        # We also allow previous context because the user may
+        # continue a multi-turn travel conversation.
+        # --------------------------------------------------------
+
+        is_continuation = (
+            state.get("pending_clarification") is not None
+            or bool(previous)
+        )
+
+        if not is_continuation:
+            return {
+                "perception": current
+            }
+
+        # --------------------------------------------------------
+        # 5. Preserve destination
+        # --------------------------------------------------------
+
+        if not current.destination:
+            current.destination = previous.get(
+                "destination"
+            )
+
+        # --------------------------------------------------------
+        # 6. Preserve dates
+        # --------------------------------------------------------
+
+        if not current.start_date:
+            current.start_date = previous.get(
+                "start_date"
+            )
+
+        if not current.end_date:
+            current.end_date = previous.get(
+                "end_date"
+            )
+
+        # --------------------------------------------------------
+        # 7. Preserve duration
+        # --------------------------------------------------------
+
+        if not current.duration_days:
+            current.duration_days = previous.get(
+                "duration_days"
+            )
+
+        # --------------------------------------------------------
+        # 8. Preserve travellers
+        #
+        # Pydantic currently defaults travellers to 1.
+        # Therefore, if the LLM returns 1 but the previous
+        # request explicitly had 2+, keep the previous value.
+        # --------------------------------------------------------
+
+        previous_travellers = previous.get(
+            "travellers"
+        )
+
+        if (
+            current.travellers == 1
+            and previous_travellers
+            and previous_travellers != 1
+        ):
+            current.travellers = previous_travellers
+
+        # --------------------------------------------------------
+        # 9. Preserve budget
+        # --------------------------------------------------------
+
+        if current.budget is None:
+            current.budget = previous.get(
+                "budget"
+            )
+
+        # --------------------------------------------------------
+        # 10. Preserve currency
+        # --------------------------------------------------------
+
+        if not current.currency:
+            current.currency = previous.get(
+                "currency",
+                "INR",
+            )
+
+        # --------------------------------------------------------
+        # 11. Preserve preferences
+        # --------------------------------------------------------
+
+        if (
+            not current.preferences
+            and previous.get("preferences")
+        ):
+            current.preferences = previous.get(
+                "preferences"
+            )
+
+        # --------------------------------------------------------
+        # 12. Preserve transport mode
+        # --------------------------------------------------------
+
+        if current.transport_mode == "unknown":
+            current.transport_mode = previous.get(
+                "transport_mode",
+                "unknown",
+            )
+
+        # --------------------------------------------------------
+        # 13. Preserve the original intent when the LLM
+        #     incorrectly changes it to plan_trip.
+        #
+        # Example:
+        #
+        # Previous:
+        #   find_transport
+        #
+        # Current:
+        #   "Manali, Himachal Pradesh, India"
+        #
+        # LLM may say:
+        #   plan_trip
+        #
+        # But this is actually a clarification answer
+        # for the previous transport search.
+        # --------------------------------------------------------
+
+        previous_intent = previous.get(
+            "intent"
+        )
+
+        if (
+            previous_intent
+            and previous_intent in {
+                "find_transport",
+                "find_hotel",
+                "find_restaurant",
+                "check_weather",
+                "book_trip",
+            }
+            and current.intent == "plan_trip"
+        ):
+            current.intent = previous_intent
+
+        # --------------------------------------------------------
+        # 14. Return the merged perception
+        # --------------------------------------------------------
+
         return {
-            "perception": perception,
+            "perception": current
         }
 
     # ========================================================
@@ -1278,24 +1487,20 @@ class TravelAgentGraph:
         return {
             "messages": [
                 AIMessage(
-                    content=(
-                        "Okay. I did not book the transport option"
-                        + (
-                            f" {selected_option_id}."
-                            if selected_option_id
-                            else "."
-                        )
-                    )
+                    content=message
                 )
             ],
 
-            # Clear pending confirmation.
+            # No pending booking confirmation remains.
             "pending_booking_confirmation": False,
 
-            # Clear selected option.
+            # Clear selected transport option.
             "selected_option_id": None,
 
-            # No booking created.
+            # IMPORTANT:
+            # The database booking has been cancelled.
+            # Do not keep the old confirmed booking
+            # inside the current workflow state.
             "booking": None,
         }
 
@@ -1940,6 +2145,10 @@ unsupported information.
                 )
             ),
 
+            "trip_context": workflow_state.get(
+                "trip_context"
+            ),
+
             "tool_context": None,
 
             # ------------------------------------------------
@@ -1997,41 +2206,38 @@ unsupported information.
         self.memory.save_workflow_state(
             session_id,
             {
+                "pending_clarification": result.get(
+                    "pending_clarification"
+                ),
 
-                "pending_clarification": (
-                    result.get(
-                        "pending_clarification"
+                "pending_destination": result.get(
+                    "pending_destination"
+                ),
+
+                "trip_context": (
+                    self._build_trip_context(
+                        result["perception"]
+                    )
+                    if result.get("perception")
+                    else workflow_state.get(
+                        "trip_context"
                     )
                 ),
 
-                "pending_destination": (
-                    result.get(
-                        "pending_destination"
-                    )
+                "transport_options": result.get(
+                    "transport_options",
+                    []
                 ),
 
-                "transport_options": (
-                    result.get(
-                        "transport_options",
-                        [],
-                    )
+                "selected_option_id": result.get(
+                    "selected_option_id"
                 ),
 
-                "selected_option_id": (
-                    result.get(
-                        "selected_option_id"
-                    )
+                "pending_booking_confirmation": result.get(
+                    "pending_booking_confirmation",
+                    False
                 ),
 
-                "pending_booking_confirmation": (
-                    result.get(
-                        "pending_booking_confirmation",
-                        False,
-                    )
-                ),
-
-                # NEW:
-                # Persist successful booking result.
                 "booking": result.get(
                     "booking"
                 ),
