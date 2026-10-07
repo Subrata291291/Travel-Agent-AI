@@ -64,3 +64,18 @@ class HotelBookingResponse(BaseModel):
     ]
 
     created_at: datetime
+
+
+class HotelBookingListResponse(BaseModel):
+    """
+    API response containing all hotel bookings
+    belonging to the current user inside the current tenant.
+    """
+
+    user_id: str
+    tenant_id: str
+    count: int = Field(
+        ge=0,
+        description="Number of hotel bookings returned.",
+    )
+    bookings: list[HotelBookingResponse]

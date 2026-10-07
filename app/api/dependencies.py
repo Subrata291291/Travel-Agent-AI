@@ -8,16 +8,17 @@ def get_tenant_context(
     x_tenant_id: str | None = Header(default=None),
 ) -> TenantContext:
     """
-    Resolve the current user and tenant context.
+    Resolve the current request identity.
 
-    Development purpose:
-    - Reads user_id and tenant_id from request headers.
-    - Creates a TenantContext used by the application layer.
+    Development implementation:
+        X-User-ID
+        X-Tenant-ID
 
-    Production:
-    - These values should come from authenticated credentials
-      such as a JWT or API key.
-    - Clients must not be trusted to freely choose tenant_id.
+    Production authentication can later replace this
+    implementation with JWT/API-key based identity resolution.
+
+    The rest of the application should continue receiving
+    TenantContext and should not care how authentication works.
     """
 
     if not x_user_id:

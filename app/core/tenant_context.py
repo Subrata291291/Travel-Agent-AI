@@ -1,46 +1,42 @@
-"""
-Tenant context for the Travel Agent SaaS application.
-
-A tenant represents one customer/company using the SaaS platform.
-
-The context is intentionally small and framework-independent so it can
-later be used by FastAPI, background workers, CLI scripts, or tests.
-"""
+from dataclasses import dataclass
 
 
+@dataclass(frozen=True)
 class TenantContext:
     """
-    Holds the tenant identity for the current application workflow.
+    Trusted identity context for the current request.
 
-    Example:
+    This object represents:
+    - which tenant is making the request
+    - which user is making the request
 
-        context = TenantContext(
-            tenant_id="tenant_demo",
-            user_id="user_demo",
-        )
-
-    Services and repositories can use this context to ensure that
-    data is accessed only within the correct tenant.
+    API routes and services should use this context
+    instead of reading identity information directly.
     """
 
-    def __init__(
-        self,
-        tenant_id: str,
-        user_id: str,
-    ) -> None:
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
+    tenant_id: str
+    user_id: str
 
-        if not user_id:
-            raise ValueError("user_id is required")
+    def __post_init__(self):
+        """
+        Validate the identity values at the application boundary.
+        """
 
-        self.tenant_id = tenant_id
-        self.user_id = user_id
+        if not self.tenant_id or not self.tenant_id.strip():
+            raise ValueError("tenant_id cannot be empty.")
 
-    def __repr__(self) -> str:
-        return (
-            f"TenantContext("
-            f"tenant_id={self.tenant_id!r}, "
-            f"user_id={self.user_id!r}"
-            f")"
+        if not self.user_id or not self.user_id.strip():
+            raise ValueError("user_id cannot be empty.")
+
+        # Normalize surrounding whitespace.
+        object.__setattr__(
+            self,
+            "tenant_id",
+            self.tenant_id.strip(),
+        )
+
+        object.__setattr__(
+            self,
+            "user_id",
+            self.user_id.strip(),
         )
