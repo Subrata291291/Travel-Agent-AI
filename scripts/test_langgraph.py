@@ -185,6 +185,7 @@ def main():
         ),
         user_id=user_id,
         session_id=session_id,
+        tenant_id="tenant_demo",
     )
 
     print_result(
@@ -200,6 +201,7 @@ def main():
         user_message="Himachal Pradesh",
         user_id=user_id,
         session_id=session_id,
+        tenant_id="tenant_demo",
     )
 
     print_result(
@@ -215,6 +217,7 @@ def main():
         user_message="Book TRAIN-1",
         user_id=user_id,
         session_id=session_id,
+        tenant_id="tenant_demo",
     )
 
     print_result(
@@ -226,6 +229,7 @@ def main():
         user_message="Yes, book it",
         user_id=user_id,
         session_id=session_id,
+        tenant_id="tenant_demo",
     )
 
     print_result(
@@ -237,6 +241,7 @@ def main():
         user_message="Yes, book it",
         user_id=user_id,
         session_id=session_id,
+        tenant_id="tenant_demo",
     )
 
     print_result("TURN 5 — DUPLICATE CONFIRMATION TEST", result_5)
@@ -253,6 +258,7 @@ def main():
     result = agent.run(
         user_id="user_001",
         session_id="session_001",
+        tenant_id="tenant_demo",
         user_message="Show my bookings",
     )
 

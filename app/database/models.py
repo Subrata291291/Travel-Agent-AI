@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -43,6 +44,13 @@ class Booking(Base):
 
     user_id: Mapped[str] = mapped_column(
         String(128),
+        nullable=False,
+        index=True,
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tenants.tenant_id"),
         nullable=False,
         index=True,
     )
@@ -192,6 +200,13 @@ class HotelBooking(Base):
         index=True,
     )
 
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tenants.tenant_id"),
+        nullable=False,
+        index=True,
+    )
+
     session_id: Mapped[str] = mapped_column(
         String(128),
         nullable=False,
@@ -297,7 +312,6 @@ class HotelBooking(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
-
 class WorkflowState(Base):
     """
     Durable representation of an agent workflow state.
@@ -318,6 +332,13 @@ class WorkflowState(Base):
     session_id: Mapped[str] = mapped_column(
         String(128),
         primary_key=True,
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tenants.tenant_id"),
+        nullable=False,
+        index=True,
     )
 
     # --------------------------------------------------------
@@ -369,4 +390,181 @@ class WorkflowState(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+class Tenant(Base):
+    """
+    Represents one customer/account in the SaaS platform.
+
+    A tenant may represent:
+    - a travel company
+    - a travel agency
+    - an organization
+    - or an individual SaaS account
+    """
+
+    __tablename__ = "tenants"
+
+    # --------------------------------------------------------
+    # Primary identifier
+    # --------------------------------------------------------
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    # --------------------------------------------------------
+    # Tenant information
+    # --------------------------------------------------------
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    slug: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # Tenant status
+    # --------------------------------------------------------
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    # --------------------------------------------------------
+    # Timestamp
+    # --------------------------------------------------------
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class User(Base):
+    """
+    Represents a user belonging to a tenant.
+
+    The tenant_id field establishes the SaaS ownership boundary.
+    """
+
+    __tablename__ = "users"
+
+    # --------------------------------------------------------
+    # Primary identifier
+    # --------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    # --------------------------------------------------------
+    # Tenant ownership
+    # --------------------------------------------------------
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # User information
+    # --------------------------------------------------------
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    # --------------------------------------------------------
+    # Authorization foundation
+    # --------------------------------------------------------
+
+    role: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="user",
+    )
+
+    # --------------------------------------------------------
+    # Account status
+    # --------------------------------------------------------
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    # --------------------------------------------------------
+    # Timestamp
+    # --------------------------------------------------------
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tenants.tenant_id"),
+        nullable=False,
+        index=True,
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    role: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="user",
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )

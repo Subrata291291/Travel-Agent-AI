@@ -28,6 +28,7 @@ def main():
 
     user_id = "user_001"
     session_id = "session_001"
+    tenant_id = "tenant_demo"
 
     # -------------------------
     # Existing long-term
@@ -61,6 +62,7 @@ def main():
     # Store current message
     memory.add_message(
         session_id,
+        tenant_id,
         "human",
         user_message,
     )
@@ -87,6 +89,7 @@ def main():
 
     memory_context = memory.get_context(
         session_id,
+        tenant_id,
         user_id,
     )
 

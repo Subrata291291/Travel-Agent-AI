@@ -1,4 +1,3 @@
-from urllib import request
 from uuid import uuid4
 import hashlib
 
@@ -83,6 +82,7 @@ class BookingService:
 
         idempotency_source = "|".join(
             [
+                str(request.tenant_id),
                 str(request.user_id),
                 str(request.option_id),
                 str(selected_option.get("mode", "")),
@@ -97,6 +97,45 @@ class BookingService:
         return hashlib.sha256(
             idempotency_source.encode("utf-8")
         ).hexdigest()
+
+    @staticmethod
+    def _build_legacy_idempotency_key(
+        request: BookingRequest,
+        selected_option: dict,
+    ) -> str:
+        """Return the pre-tenant key for safely finding existing rows."""
+        legacy_source = "|".join(
+            [
+                str(request.user_id),
+                str(request.option_id),
+                str(selected_option.get("mode", "")),
+                str(selected_option.get("origin", "")),
+                str(selected_option.get("destination", "")),
+                str(selected_option.get("departure_time", "")),
+                str(selected_option.get("arrival_time", "")),
+                str(request.travellers),
+            ]
+        )
+        return hashlib.sha256(legacy_source.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _find_existing_booking(
+        cls,
+        repository: BookingRepository,
+        request: BookingRequest,
+        selected_option: dict,
+    ) -> Booking | None:
+        for idempotency_key in (
+            cls._build_idempotency_key(request, selected_option),
+            cls._build_legacy_idempotency_key(request, selected_option),
+        ):
+            booking = repository.get_booking_by_idempotency_key(
+                idempotency_key=idempotency_key,
+                tenant_id=request.tenant_id,
+            )
+            if booking:
+                return booking
+        return None
 
     @staticmethod
     def _to_response(
@@ -148,20 +187,15 @@ class BookingService:
         the same existing booking.
         """
 
-        idempotency_key = self._build_idempotency_key(
-            request=request,
-            selected_option=selected_option,
-        )
-
         db = SessionLocal()
 
         try:
             repository = BookingRepository(db)
 
-            booking = (
-                repository.get_booking_by_idempotency_key(
-                    idempotency_key=idempotency_key,
-                )
+            booking = self._find_existing_booking(
+                repository,
+                request,
+                selected_option,
             )
 
             if not booking:
@@ -225,10 +259,10 @@ class BookingService:
             # sessions will produce the same key.
             # ------------------------------------------------
 
-            existing_booking = (
-                repository.get_booking_by_idempotency_key(
-                    idempotency_key=idempotency_key,
-                )
+            existing_booking = self._find_existing_booking(
+                repository,
+                request,
+                selected_option,
             )
 
             if existing_booking:
@@ -265,6 +299,7 @@ class BookingService:
                 booking_id=booking_id,
 
                 user_id=request.user_id,
+                tenant_id=request.tenant_id,
 
                 # Keep the current conversation/session ID
                 # for audit/history purposes.
@@ -358,10 +393,10 @@ class BookingService:
 
                 db.rollback()
 
-                existing_booking = (
-                    repository.get_booking_by_idempotency_key(
-                        idempotency_key=idempotency_key,
-                    )
+                existing_booking = self._find_existing_booking(
+                    repository,
+                    request,
+                    selected_option,
                 )
 
                 if not existing_booking:
@@ -392,6 +427,7 @@ class BookingService:
         self,
         booking_id: str,
         user_id: str,
+        tenant_id: str,
     ) -> BookingResponse:
         """
         Retrieve one booking by its public booking ID.
@@ -413,21 +449,14 @@ class BookingService:
             # ------------------------------------------------
 
             booking = repository.get_by_id(
-                booking_id
+                booking_id,
+                user_id,
+                tenant_id,
             )
 
             if not booking:
                 raise ValueError(
                     f"Booking {booking_id} was not found."
-                )
-
-            # ------------------------------------------------
-            # 2. Ownership check
-            # ------------------------------------------------
-
-            if booking.user_id != user_id:
-                raise PermissionError(
-                    "You are not allowed to view this booking."
                 )
 
             # ------------------------------------------------
@@ -453,6 +482,7 @@ class BookingService:
         self,
         booking_id: str,
         user_id: str,
+        tenant_id: str,
     ) -> BookingResponse:
         """
         Cancel an existing booking.
@@ -475,21 +505,14 @@ class BookingService:
             # ------------------------------------------------
 
             booking = repository.get_by_id(
-                booking_id
+                booking_id,
+                user_id,
+                tenant_id,
             )
 
             if not booking:
                 raise ValueError(
                     f"Booking {booking_id} was not found."
-                )
-
-            # ------------------------------------------------
-            # 2. Ownership check
-            # ------------------------------------------------
-
-            if booking.user_id != user_id:
-                raise PermissionError(
-                    "You are not allowed to cancel this booking."
                 )
 
             # ------------------------------------------------
@@ -547,6 +570,7 @@ class BookingService:
     def get_user_bookings(
         self,
         user_id: str,
+        tenant_id: str,
     ) -> list[BookingResponse]:
 
         db = SessionLocal()
@@ -555,7 +579,8 @@ class BookingService:
             repository = BookingRepository(db)
 
             bookings = repository.get_user_bookings(
-                user_id=user_id
+                user_id=user_id,
+                tenant_id=tenant_id
             )
 
             return [

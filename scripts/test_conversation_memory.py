@@ -7,22 +7,26 @@ def main():
 
     user_id = "user_001"
     session_id = "session_001"
+    tenant_id = "tenant_demo"
 
     # Current conversation
     memory.add_message(
         session_id,
+        tenant_id,
         "human",
         "I want to visit Manali."
     )
 
     memory.add_message(
         session_id,
+        tenant_id,
         "assistant",
         "Sure! How many days?"
     )
 
     memory.add_message(
         session_id,
+        tenant_id,
         "human",
         "4 days."
     )
@@ -46,6 +50,7 @@ def main():
     # Get combined context
     context = memory.get_context(
         session_id,
+        tenant_id,
         user_id,
     )
 

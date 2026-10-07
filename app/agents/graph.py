@@ -1,7 +1,5 @@
-from email import message
 from typing import Annotated, TypedDict
 import json
-from unittest import result
 
 from langchain_core.messages import (
     AIMessage,
@@ -9,11 +7,9 @@ from langchain_core.messages import (
     HumanMessage,
 )
 
-from langgraph import graph
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
-from app.agents import perception
 from app.agents.perception import PerceptionAgent
 from app.agents.planner import PlannerAgent
 from app.agents.executor import ToolExecutor
@@ -54,6 +50,7 @@ class TravelState(TypedDict):
     user_message: str
     user_id: str
     session_id: str
+    tenant_id: str
 
     messages: Annotated[
         list[BaseMessage],
@@ -523,7 +520,8 @@ class TravelAgentGraph:
         # --------------------------------------------------------
 
         conversation_history = self.memory.get_messages(
-            state["session_id"]
+            state["session_id"],
+            state["tenant_id"],
         )
 
         # --------------------------------------------------------
@@ -710,6 +708,7 @@ class TravelAgentGraph:
 
         memory_context = self.memory.get_context(
             state["session_id"],
+            state["tenant_id"],
             state["user_id"],
         )
 
@@ -1567,6 +1566,7 @@ class TravelAgentGraph:
 
         request = HotelBookingRequest(
             user_id=state["user_id"],
+            tenant_id=state["tenant_id"],
             session_id=state["session_id"],
             hotel_id=selected_hotel_id,
             travellers=travellers,
@@ -1767,7 +1767,8 @@ class TravelAgentGraph:
 
             bookings = (
                 self.hotel_booking_service.get_user_bookings(
-                    user_id=user_id
+                    user_id=user_id,
+                    tenant_id=state["tenant_id"],
                 )
             )
 
@@ -1775,7 +1776,8 @@ class TravelAgentGraph:
 
             bookings = (
                 self.booking_service.get_user_bookings(
-                    user_id=user_id
+                    user_id=user_id,
+                    tenant_id=state["tenant_id"],
                 )
             )
 
@@ -1796,7 +1798,8 @@ class TravelAgentGraph:
 
                 bookings = (
                     self.hotel_booking_service.get_user_bookings(
-                        user_id=user_id
+                        user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
@@ -1812,13 +1815,15 @@ class TravelAgentGraph:
 
                 transport_bookings = (
                     self.booking_service.get_user_bookings(
-                        user_id=user_id
+                        user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
                 hotel_bookings = (
                     self.hotel_booking_service.get_user_bookings(
-                        user_id=user_id
+                        user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
@@ -2201,16 +2206,17 @@ class TravelAgentGraph:
         than relying on the LLM.
         """
 
-        perception = state["perception"]
+        perception = state.get("perception")
+        booking_id = getattr(perception, "booking_id", None)
+        user_id = state.get("user_id")
 
-        booking_id = perception.booking_id
+        if not booking_id:
+            state["answer"] = "Please provide the booking ID you want to look up."
+            return state
 
-        state["answer"] = (
-            f"I couldn't find any booking with ID "
-            f"{booking_id}."
-        )
-
-        return state
+        if not user_id:
+            state["answer"] = "I couldn't determine your user account for retrieving this booking."
+            return state
 
         # ======================================================
         # 1. Try HOTEL booking
@@ -2220,7 +2226,8 @@ class TravelAgentGraph:
             hotel_booking = (
                 self.hotel_booking_service.get_booking(
                     booking_id,
-                    state["user_id"],
+                    user_id,
+                    state["tenant_id"],
                 )
             )
 
@@ -2251,7 +2258,7 @@ class TravelAgentGraph:
 
             return state
 
-        except ValueError:
+        except (ValueError, PermissionError):
             # Not a hotel booking.
             pass
 
@@ -2262,7 +2269,8 @@ class TravelAgentGraph:
         try:
             booking = self.booking_service.get_booking(
                 booking_id,
-                state["user_id"],
+                user_id,
+                state["tenant_id"],
             )
 
             state["answer"] = (
@@ -2288,20 +2296,14 @@ class TravelAgentGraph:
 
             return state
 
-        except PermissionError:
-            state["answer"] = (
-                f"I couldn't find a booking with ID {booking_id}."
-            )
-            return state
-
-        except ValueError:
+        except (PermissionError, ValueError):
             pass
 
         # ======================================================
         # 3. Booking not found
         # ======================================================
 
-        state["response"] = (
+        state["answer"] = (
             f"I couldn't find any booking with ID "
             f"{booking_id}."
         )
@@ -2429,6 +2431,8 @@ class TravelAgentGraph:
                 hotel_booking = (
                     self.hotel_booking_service.get_booking(
                         booking_id=booking_id,
+                        user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
@@ -2446,6 +2450,7 @@ class TravelAgentGraph:
                     self.hotel_booking_service.cancel_booking(
                         booking_id=booking_id,
                         user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
@@ -2485,6 +2490,7 @@ class TravelAgentGraph:
                     self.booking_service.cancel_booking(
                         booking_id=booking_id,
                         user_id=user_id,
+                        tenant_id=state["tenant_id"],
                     )
                 )
 
@@ -2626,6 +2632,7 @@ class TravelAgentGraph:
                 self.hotel_booking_service.get_booking(
                     booking_id,
                     user_id,
+                    state["tenant_id"],
                 )
             )
 
@@ -2679,6 +2686,7 @@ class TravelAgentGraph:
             booking = self.booking_service.get_booking(
                 booking_id,
                 user_id,
+                state["tenant_id"],
             )
 
             # Already cancelled
@@ -3044,6 +3052,7 @@ class TravelAgentGraph:
 
         request = BookingRequest(
             user_id=state["user_id"],
+            tenant_id=state["tenant_id"],
             session_id=state["session_id"],
             option_id=selected_option_id,
             travellers=travellers,
@@ -3716,6 +3725,7 @@ unsupported information.
         user_message: str,
         user_id: str,
         session_id: str,
+        tenant_id: str,
     ):
         """
         Execute one complete user turn.
@@ -3732,6 +3742,7 @@ unsupported information.
 
         self.memory.add_message(
             session_id,
+            tenant_id,
             "human",
             user_message,
         )
@@ -3742,7 +3753,8 @@ unsupported information.
 
         workflow_state = (
             self.memory.get_workflow_state(
-                session_id
+                session_id,
+                tenant_id,
             )
         )
 
@@ -3776,6 +3788,8 @@ unsupported information.
             "user_message": user_message,
 
             "user_id": user_id,
+
+            "tenant_id": tenant_id,
 
             "session_id": session_id,
 
@@ -3904,6 +3918,7 @@ unsupported information.
         self.memory.save_workflow_state(
             session_id,
             user_id,
+            tenant_id,
             {
                 "pending_clarification": state_value(
                     "pending_clarification"
@@ -3990,6 +4005,7 @@ unsupported information.
 
             self.memory.add_message(
                 session_id,
+                tenant_id,
                 "assistant",
                 final_message.content,
             )

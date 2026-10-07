@@ -2,7 +2,6 @@ from datetime import datetime
 import hashlib
 from uuid import uuid4
 
-from httpcore import request
 from sqlalchemy.exc import IntegrityError
 
 from app.database.connection import SessionLocal
@@ -28,6 +27,21 @@ class HotelBookingService:
 
     The LLM must never directly create a HotelBooking.
     """
+
+    @staticmethod
+    def _find_existing_booking(
+        repository: HotelBookingRepository,
+        idempotency_keys: tuple[str, str],
+        tenant_id: str,
+    ) -> HotelBooking | None:
+        for idempotency_key in idempotency_keys:
+            booking = repository.get_by_idempotency_key(
+                idempotency_key,
+                tenant_id,
+            )
+            if booking:
+                return booking
+        return None
 
     # --------------------------------------------------------
     # Helper: calculate nights
@@ -209,6 +223,7 @@ class HotelBookingService:
 
         idempotency_source = "|".join(
             [
+                str(request.tenant_id),
                 str(request.user_id),
                 str(request.hotel_id),
                 str(check_in_date),
@@ -219,6 +234,19 @@ class HotelBookingService:
 
         idempotency_key = hashlib.sha256(
             idempotency_source.encode("utf-8")
+        ).hexdigest()
+
+        legacy_idempotency_source = "|".join(
+            [
+                str(request.user_id),
+                str(request.hotel_id),
+                str(check_in_date),
+                str(check_out_date),
+                str(request.travellers),
+            ]
+        )
+        legacy_idempotency_key = hashlib.sha256(
+            legacy_idempotency_source.encode("utf-8")
         ).hexdigest()
 
         # ----------------------------------------------------
@@ -234,8 +262,10 @@ class HotelBookingService:
             # Check whether this exact booking already exists
             # ------------------------------------------------
 
-            existing = repository.get_by_idempotency_key(
-                idempotency_key
+            existing = self._find_existing_booking(
+                repository,
+                (idempotency_key, legacy_idempotency_key),
+                request.tenant_id,
             )
 
             if existing:
@@ -248,6 +278,7 @@ class HotelBookingService:
             booking = HotelBooking(
                 booking_id=f"BOOK-{uuid4().hex[:12].upper()}",
                 user_id=request.user_id,
+                tenant_id=request.tenant_id,
                 session_id=request.session_id,
                 hotel_id=request.hotel_id,
                 hotel_name=hotel_name,
@@ -272,8 +303,10 @@ class HotelBookingService:
                 # booking between our check and insert.
                 db.rollback()
 
-                existing = repository.get_by_idempotency_key(
-                    idempotency_key
+                existing = self._find_existing_booking(
+                    repository,
+                    (idempotency_key, legacy_idempotency_key),
+                    request.tenant_id,
                 )
 
                 if existing:
@@ -298,6 +331,7 @@ class HotelBookingService:
         self,
         booking_id: str,
         user_id: str,
+        tenant_id: str,
     ) -> HotelBookingResponse:
         """
         Retrieve one hotel booking securely.
@@ -313,21 +347,14 @@ class HotelBookingService:
             repository = HotelBookingRepository(db)
 
             booking = repository.get_by_id(
-                booking_id
+                booking_id,
+                user_id,
+                tenant_id,
             )
 
             if not booking:
                 raise ValueError(
                     f"Hotel booking {booking_id} was not found."
-                )
-
-            # ------------------------------------------------
-            # Ownership check
-            # ------------------------------------------------
-
-            if booking.user_id != user_id:
-                raise PermissionError(
-                    "You are not allowed to view this booking."
                 )
 
             return self._to_response(booking)
@@ -342,6 +369,7 @@ class HotelBookingService:
     def get_user_bookings(
         self,
         user_id: str,
+        tenant_id: str,
     ) -> list[HotelBookingResponse]:
         """
         Retrieve all hotel bookings belonging to a user.
@@ -353,7 +381,8 @@ class HotelBookingService:
             repository = HotelBookingRepository(db)
 
             bookings = repository.get_user_bookings(
-                user_id
+                user_id,
+                tenant_id,
             )
 
             return [
@@ -370,6 +399,7 @@ class HotelBookingService:
         self,
         booking_id: str,
         user_id: str,
+        tenant_id: str,
     ) -> HotelBookingResponse:
         """
         Cancel an existing hotel booking.
@@ -389,7 +419,9 @@ class HotelBookingService:
             repository = HotelBookingRepository(db)
 
             booking = repository.get_by_id(
-                booking_id
+                booking_id,
+                user_id,
+                tenant_id,
             )
 
             # ------------------------------------------------
@@ -399,15 +431,6 @@ class HotelBookingService:
             if not booking:
                 raise ValueError(
                     f"Hotel booking {booking_id} was not found."
-                )
-
-            # ------------------------------------------------
-            # 2. Ownership check
-            # ------------------------------------------------
-
-            if booking.user_id != user_id:
-                raise PermissionError(
-                    "You are not allowed to cancel this booking."
                 )
 
             # ------------------------------------------------

@@ -1,5 +1,3 @@
-from multiprocessing import context
-
 from app.memory.short_term import ShortTermMemory
 from app.memory.preferences import PreferenceMemory
 from app.database.connection import SessionLocal
@@ -25,12 +23,14 @@ class ConversationMemory:
     def add_message(
         self,
         session_id: str,
+        tenant_id: str,
         role: str,
         content: str,
     ):
 
         self.short_term.add_message(
             session_id,
+            tenant_id,
             role,
             content,
         )
@@ -38,10 +38,12 @@ class ConversationMemory:
     def get_messages(
         self,
         session_id: str,
+        tenant_id: str,
     ):
 
         return self.short_term.get_messages(
-            session_id
+            session_id,
+            tenant_id
         )
 
     # ========================================================
@@ -75,6 +77,7 @@ class ConversationMemory:
     def get_context(
         self,
         session_id: str,
+        tenant_id: str,
         user_id: str,
     ):
 
@@ -82,7 +85,8 @@ class ConversationMemory:
 
             "conversation_history": (
                 self.get_messages(
-                    session_id
+                    session_id,
+                    tenant_id
                 )
             ),
 
@@ -95,7 +99,8 @@ class ConversationMemory:
 
         workflow_state = (
             self.get_workflow_state(
-                session_id
+                session_id,
+                tenant_id
             )
         )
 
@@ -113,6 +118,7 @@ class ConversationMemory:
         self,
         session_id: str,
         user_id: str,
+        tenant_id: str,
         state: dict,
     ):
 
@@ -125,7 +131,8 @@ class ConversationMemory:
             repository.save_workflow_state(
                 session_id=session_id,
                 user_id=user_id,
-                state=json.dumps(state),
+                tenant_id=tenant_id,
+                state=json.dumps(state, default=str),
             )
 
         finally:
@@ -135,6 +142,7 @@ class ConversationMemory:
     def get_workflow_state(
         self,
         session_id: str,
+        tenant_id: str,
     ):
 
         db = SessionLocal()
@@ -145,7 +153,8 @@ class ConversationMemory:
 
             workflow_state = (
                 repository.get_workflow_state(
-                    session_id
+                    session_id,
+                    tenant_id,
                 )
             )
 
@@ -163,6 +172,7 @@ class ConversationMemory:
     def clear_workflow_state(
         self,
         session_id: str,
+        tenant_id: str,
     ):
 
         db = SessionLocal()
@@ -172,7 +182,8 @@ class ConversationMemory:
             repository = WorkflowStateRepository(db)
 
             repository.delete_workflow_state(
-                session_id
+                session_id,
+                tenant_id,
             )
 
         finally:

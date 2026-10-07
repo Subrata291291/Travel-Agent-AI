@@ -14,6 +14,7 @@ class HotelBookingRequest(BaseModel):
     """
 
     user_id: str
+    tenant_id: str = Field(min_length=1)
     session_id: str
 
     hotel_id: str = Field(

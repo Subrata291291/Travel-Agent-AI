@@ -10,7 +10,8 @@ def main():
     service = BookingService()
 
     bookings = service.get_user_bookings(
-        user_id="user_001"
+        user_id="user_001",
+        tenant_id="tenant_demo",
     )
 
     print()

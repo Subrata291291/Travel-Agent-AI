@@ -11,6 +11,7 @@ _booking_service = BookingService()
 @tool
 def book_transport(
     user_id: str,
+    tenant_id: str,
     session_id: str,
     option_id: str,
     travellers: int = 1,
@@ -57,6 +58,7 @@ def book_transport(
 
     request = BookingRequest(
         user_id=user_id,
+        tenant_id=tenant_id,
         session_id=session_id,
         option_id=option_id,
         travellers=travellers,

@@ -45,6 +45,7 @@ result = agent.run(
     ),
     user_id="test-user",
     session_id="failure-test-session",
+    tenant_id="tenant_demo",
 )
 
 

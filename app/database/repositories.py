@@ -17,16 +17,24 @@ class BookingRepository:
         self.db.refresh(booking)
         return booking
 
-    def get_by_id(self, booking_id: str) -> Booking | None:
+    def get_by_id(
+        self,
+        booking_id: str,
+        user_id: str,
+        tenant_id: str,
+    ) -> Booking | None:
         return self.db.scalar(
             select(Booking).where(
-                Booking.booking_id == booking_id
+                Booking.booking_id == booking_id,
+                Booking.user_id == user_id,
+                Booking.tenant_id == tenant_id,
             )
         )
 
     def get_confirmed_booking(
         self,
         user_id: str,
+        tenant_id: str,
         session_id: str,
         option_id: str,
     ) -> Booking | None:
@@ -42,6 +50,7 @@ class BookingRepository:
             select(Booking)
             .where(
                 Booking.user_id == user_id,
+                Booking.tenant_id == tenant_id,
                 Booking.session_id == session_id,
                 Booking.option_id == option_id,
                 Booking.status == "confirmed",
@@ -52,6 +61,7 @@ class BookingRepository:
     def get_booking_by_idempotency_key(
         self,
         idempotency_key: str,
+        tenant_id: str,
     ) -> Booking | None:
         """
         Find an existing booking using its stable idempotency key.
@@ -66,12 +76,14 @@ class BookingRepository:
             select(Booking)
             .where(
                 Booking.idempotency_key == idempotency_key,
+                Booking.tenant_id == tenant_id,
             )
         )
 
     def get_user_bookings(
         self,
         user_id: str,
+        tenant_id: str,
     ) -> list[Booking]:
         """
         Return all bookings belonging to a user.
@@ -83,7 +95,8 @@ class BookingRepository:
             self.db.scalars(
                 select(Booking)
                 .where(
-                    Booking.user_id == user_id
+                    Booking.user_id == user_id,
+                    Booking.tenant_id == tenant_id,
                 )
                 .order_by(
                     Booking.created_at.desc()
@@ -127,7 +140,12 @@ class HotelBookingRepository:
     # Find by booking ID
     # --------------------------------------------------------
 
-    def get_by_id(self, booking_id: str):
+    def get_by_id(
+        self,
+        booking_id: str,
+        user_id: str,
+        tenant_id: str,
+    ):
         """
         Retrieve a hotel booking using its public booking ID.
         """
@@ -135,7 +153,9 @@ class HotelBookingRepository:
         return (
             self.db.query(HotelBooking)
             .filter(
-                HotelBooking.booking_id == booking_id
+                HotelBooking.booking_id == booking_id,
+                HotelBooking.user_id == user_id,
+                HotelBooking.tenant_id == tenant_id,
             )
             .first()
         )
@@ -147,6 +167,7 @@ class HotelBookingRepository:
     def get_confirmed_booking(
         self,
         user_id: str,
+        tenant_id: str,
         hotel_id: str,
     ):
         """
@@ -171,6 +192,7 @@ class HotelBookingRepository:
     def get_by_idempotency_key(
         self,
         idempotency_key: str,
+        tenant_id: str,
     ):
         """
         Retrieve a booking using its idempotency key.
@@ -182,7 +204,8 @@ class HotelBookingRepository:
             self.db.query(HotelBooking)
             .filter(
                 HotelBooking.idempotency_key
-                == idempotency_key
+                == idempotency_key,
+                HotelBooking.tenant_id == tenant_id,
             )
             .first()
         )
@@ -194,6 +217,7 @@ class HotelBookingRepository:
     def get_user_bookings(
         self,
         user_id: str,
+        tenant_id: str,
     ):
         """
         Retrieve all hotel bookings belonging to a user.
@@ -202,7 +226,9 @@ class HotelBookingRepository:
         return (
             self.db.query(HotelBooking)
             .filter(
-                HotelBooking.user_id == user_id
+                HotelBooking.user_id == user_id,
+                HotelBooking.tenant_id == tenant_id,
+                HotelBooking.tenant_id == tenant_id,
             )
             .order_by(
                 HotelBooking.created_at.desc()
@@ -232,11 +258,13 @@ class WorkflowStateRepository:
     def get_workflow_state(
         self,
         session_id: str,
+        tenant_id: str,
     ):
         return self.db.scalar(
             select(WorkflowState)
             .where(
-                WorkflowState.session_id == session_id
+                WorkflowState.session_id == session_id,
+                WorkflowState.tenant_id == tenant_id,
             )
         )
 
@@ -248,15 +276,18 @@ class WorkflowStateRepository:
         self,
         session_id: str,
         user_id: str,
+        tenant_id: str,
         state: str,
     ):
         workflow_state = self.get_workflow_state(
-            session_id
+            session_id,
+            tenant_id,
         )
 
         if workflow_state:
 
             workflow_state.user_id = user_id
+            workflow_state.tenant_id = tenant_id
             workflow_state.state = state
 
         else:
@@ -264,6 +295,7 @@ class WorkflowStateRepository:
             workflow_state = WorkflowState(
                 session_id=session_id,
                 user_id=user_id,
+                tenant_id=tenant_id,
                 state=state,
             )
 
@@ -281,10 +313,11 @@ class WorkflowStateRepository:
     def delete_workflow_state(
         self,
         session_id: str,
+        tenant_id: str,
     ):
-
         workflow_state = self.get_workflow_state(
-            session_id
+            session_id,
+            tenant_id,
         )
 
         if workflow_state:
