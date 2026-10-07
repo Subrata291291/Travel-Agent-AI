@@ -1,6 +1,10 @@
 from sqlalchemy import select
 
-from app.database.models import Booking, HotelBooking
+from app.database.models import (
+    Booking,
+    HotelBooking,
+    WorkflowState,
+)
 
 
 class BookingRepository:
@@ -205,3 +209,90 @@ class HotelBookingRepository:
             )
             .all()
         )
+
+
+class WorkflowStateRepository:
+    """
+    Repository for durable agent workflow state.
+
+    Role:
+    - Saves workflow state to the database.
+    - Retrieves workflow state by session.
+    - Updates existing workflow state.
+    - Deletes workflow state when a workflow is finished.
+    """
+
+    def __init__(self, db):
+        self.db = db
+
+    # ========================================================
+    # Get workflow state
+    # ========================================================
+
+    def get_workflow_state(
+        self,
+        session_id: str,
+    ):
+        return self.db.scalar(
+            select(WorkflowState)
+            .where(
+                WorkflowState.session_id == session_id
+            )
+        )
+
+    # ========================================================
+    # Save / update workflow state
+    # ========================================================
+
+    def save_workflow_state(
+        self,
+        session_id: str,
+        user_id: str,
+        state: str,
+    ):
+        workflow_state = self.get_workflow_state(
+            session_id
+        )
+
+        if workflow_state:
+
+            workflow_state.user_id = user_id
+            workflow_state.state = state
+
+        else:
+
+            workflow_state = WorkflowState(
+                session_id=session_id,
+                user_id=user_id,
+                state=state,
+            )
+
+            self.db.add(workflow_state)
+
+        self.db.commit()
+        self.db.refresh(workflow_state)
+
+        return workflow_state
+
+    # ========================================================
+    # Delete workflow state
+    # ========================================================
+
+    def delete_workflow_state(
+        self,
+        session_id: str,
+    ):
+
+        workflow_state = self.get_workflow_state(
+            session_id
+        )
+
+        if workflow_state:
+
+            self.db.delete(
+                workflow_state
+            )
+
+            self.db.commit()
+
+        return workflow_state

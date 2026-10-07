@@ -1,6 +1,8 @@
 from datetime import datetime
+import hashlib
 from uuid import uuid4
 
+from httpcore import request
 from sqlalchemy.exc import IntegrityError
 
 from app.database.connection import SessionLocal
@@ -190,14 +192,34 @@ class HotelBookingService:
         # 5. Create idempotency key
         # ----------------------------------------------------
 
-        idempotency_key = (
-            f"hotel_booking:"
-            f"{request.user_id}:"
-            f"{request.session_id}:"
-            f"{request.hotel_id}:"
-            f"{check_in_date}:"
-            f"{check_out_date}"
+        # ----------------------------------------------------
+        # 5. Create stable idempotency key
+        # ----------------------------------------------------
+        #
+        # IMPORTANT:
+        # session_id is intentionally NOT included.
+        #
+        # A session represents a conversation/request context,
+        # not a unique booking.
+        #
+        # The same user booking the same hotel for the same
+        # dates should resolve to the same idempotency key
+        # even if the request comes from another session.
+        # ----------------------------------------------------
+
+        idempotency_source = "|".join(
+            [
+                str(request.user_id),
+                str(request.hotel_id),
+                str(check_in_date),
+                str(check_out_date),
+                str(request.travellers),
+            ]
         )
+
+        idempotency_key = hashlib.sha256(
+            idempotency_source.encode("utf-8")
+        ).hexdigest()
 
         # ----------------------------------------------------
         # 6. Database transaction

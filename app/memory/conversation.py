@@ -1,6 +1,10 @@
+from multiprocessing import context
+
 from app.memory.short_term import ShortTermMemory
 from app.memory.preferences import PreferenceMemory
-
+from app.database.connection import SessionLocal
+from app.database.repositories import WorkflowStateRepository
+import json
 
 class ConversationMemory:
 
@@ -13,8 +17,6 @@ class ConversationMemory:
         self.preferences = (
             PreferenceMemory()
         )
-
-        self.workflow_states = {}
 
     # ========================================================
     # Conversation messages
@@ -92,9 +94,8 @@ class ConversationMemory:
         }
 
         workflow_state = (
-            self.workflow_states.get(
-                session_id,
-                {}
+            self.get_workflow_state(
+                session_id
             )
         )
 
@@ -111,29 +112,69 @@ class ConversationMemory:
     def save_workflow_state(
         self,
         session_id: str,
+        user_id: str,
         state: dict,
     ):
 
-        self.workflow_states[
-            session_id
-        ] = state
+        db = SessionLocal()
+
+        try:
+
+            repository = WorkflowStateRepository(db)
+
+            repository.save_workflow_state(
+                session_id=session_id,
+                user_id=user_id,
+                state=json.dumps(state),
+            )
+
+        finally:
+
+            db.close()
 
     def get_workflow_state(
         self,
         session_id: str,
     ):
 
-        return self.workflow_states.get(
-            session_id,
-            {}
-        )
+        db = SessionLocal()
+
+        try:
+
+            repository = WorkflowStateRepository(db)
+
+            workflow_state = (
+                repository.get_workflow_state(
+                    session_id
+                )
+            )
+
+            if not workflow_state:
+                return {}
+
+            return json.loads(
+                workflow_state.state
+            )
+
+        finally:
+
+            db.close()
 
     def clear_workflow_state(
         self,
         session_id: str,
     ):
 
-        self.workflow_states.pop(
-            session_id,
-            None
-        )
+        db = SessionLocal()
+
+        try:
+
+            repository = WorkflowStateRepository(db)
+
+            repository.delete_workflow_state(
+                session_id
+            )
+
+        finally:
+
+            db.close()

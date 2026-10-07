@@ -5,6 +5,7 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
+    Text,
 )
 
 from sqlalchemy.orm import (
@@ -294,4 +295,78 @@ class HotelBooking(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WorkflowState(Base):
+    """
+    Durable representation of an agent workflow state.
+
+    Role:
+    - Stores an in-progress agent workflow.
+    - Allows the agent to resume after a process restart.
+    - Separates workflow persistence from conversation memory.
+    - Makes the memory layer ready for PostgreSQL and multi-worker deployment.
+    """
+
+    __tablename__ = "workflow_states"
+
+    # --------------------------------------------------------
+    # Session identifier
+    # --------------------------------------------------------
+
+    session_id: Mapped[str] = mapped_column(
+        String(128),
+        primary_key=True,
+    )
+
+    # --------------------------------------------------------
+    # User ownership
+    # --------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # Serialized workflow state
+    # --------------------------------------------------------
+    #
+    # The complete LangGraph state will be stored here.
+    #
+    # Example:
+    #
+    # {
+    #     "pending_booking_confirmation": True,
+    #     "pending_booking_domain": "hotel",
+    #     "selected_option_id": "HOTEL-2",
+    #     ...
+    # }
+    #
+    # We use Text for now because SQLite does not need
+    # a PostgreSQL-specific JSON type at this stage.
+    #
+
+    state: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    # --------------------------------------------------------
+    # Timestamps
+    # --------------------------------------------------------
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )

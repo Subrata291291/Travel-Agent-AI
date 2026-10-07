@@ -1,6 +1,7 @@
 from email import message
 from typing import Annotated, TypedDict
 import json
+from unittest import result
 
 from langchain_core.messages import (
     AIMessage,
@@ -67,6 +68,7 @@ class TravelState(TypedDict):
     clarification_needed: bool
     pending_clarification: str | None
     pending_destination: str | None
+    pending_destination_candidates: list[dict]
 
     tool_context: ToolContext | None
 
@@ -736,17 +738,58 @@ class TravelAgentGraph:
         Resolve the user's destination.
         """
 
-        perception = state["perception"]
+        perception = state.get("perception")
 
-        destination = perception.destination
+        destination = perception.destination if perception else None
 
-        pending_clarification = state.get(
-            "pending_clarification"
+        pending_clarification = state.get("pending_clarification")
+        pending_destination = state.get("pending_destination")
+        pending_destination_candidates = state.get(
+            "pending_destination_candidates", []
         )
 
-        pending_destination = state.get(
-            "pending_destination"
-        )
+        # ---------------------------------------------------------
+        # Handle numeric destination selection.
+        #
+        # Example:
+        # Previous state:
+        #   pending_clarification = "destination"
+        #   pending_destination = "Manali"
+        #   candidates = [...]
+        #
+        # New user message:
+        #   "2"
+        #
+        # The perception LLM may classify "2" as "other", which is
+        # correct because "2" has no meaning by itself.
+        #
+        # In this workflow state, however, "2" means:
+        # "Select destination candidate number 2."
+        # ---------------------------------------------------------
+        if (
+            pending_clarification == "destination"
+            and pending_destination_candidates
+        ):
+            user_message = str(state.get("user_message", "")).strip()
+
+            if user_message.isdigit():
+                candidate_index = int(user_message) - 1
+
+                if 0 <= candidate_index < len(pending_destination_candidates):
+                    selected_candidate = pending_destination_candidates[
+                        candidate_index
+                    ]
+
+                    destination = (
+                        f"{selected_candidate.get('name', '')}, "
+                        f"{selected_candidate.get('admin1', '')}, "
+                        f"{selected_candidate.get('country', '')}"
+                    ).replace(", ,", ",").strip()
+
+                    print(
+                        f"[DestinationResolver] Selected candidate "
+                        f"{candidate_index + 1}: {destination}"
+                    )
 
         # ----------------------------------------------------
         # Handle previous clarification
@@ -820,6 +863,7 @@ class TravelAgentGraph:
                 "clarification_needed": False,
                 "pending_clarification": None,
                 "pending_destination": None,
+                "pending_destination_candidates": [],
                 "tool_context": None,
             }
 
@@ -832,6 +876,10 @@ class TravelAgentGraph:
             "clarification_needed": True,
             "pending_clarification": "destination",
             "pending_destination": destination,
+            "pending_destination_candidates": result.get(
+                "candidates",
+                []
+            ),
         }
 
     # ========================================================
@@ -1095,7 +1143,15 @@ class TravelAgentGraph:
                 AIMessage(
                     content=question
                 )
-            ]
+            ],
+
+            "pending_clarification": "destination",
+
+            "pending_destination": (
+                resolution.get("location")
+            ),
+
+            "pending_destination_candidates": candidates,
         }
 
     # ========================================================
@@ -3751,6 +3807,13 @@ unsupported information.
                 )
             ),
 
+            "pending_destination_candidates": (
+                workflow_state.get(
+                    "pending_destination_candidates",
+                    [],
+                )
+            ),
+
             "trip_context": workflow_state.get(
                 "trip_context"
             ),
@@ -3821,7 +3884,18 @@ unsupported information.
         result = self.graph.invoke(
             initial_state
         )
-        
+
+        def state_value(
+            key: str,
+            default=None,
+        ):
+            if key in result:
+                return result[key]
+
+            return workflow_state.get(
+                key,
+                default,
+            )
 
         # ----------------------------------------------------
         # Persist workflow state
@@ -3829,13 +3903,19 @@ unsupported information.
 
         self.memory.save_workflow_state(
             session_id,
+            user_id,
             {
-                "pending_clarification": result.get(
+                "pending_clarification": state_value(
                     "pending_clarification"
                 ),
 
-                "pending_destination": result.get(
+                "pending_destination": state_value(
                     "pending_destination"
+                ),
+
+                "pending_destination_candidates": state_value(
+                    "pending_destination_candidates",
+                    [],
                 ),
 
                 "trip_context": (
@@ -3848,37 +3928,36 @@ unsupported information.
                     )
                 ),
 
-                "transport_options": result.get(
+                "transport_options": state_value(
                     "transport_options",
-                    []
+                    [],
                 ),
 
-                "hotel_options": result.get(
+                "hotel_options": state_value(
                     "hotel_options",
                     [],
                 ),
 
-                "selected_option_id": result.get(
+                "selected_option_id": state_value(
                     "selected_option_id"
                 ),
 
-                "pending_booking_confirmation": result.get(
+                "pending_booking_confirmation": state_value(
                     "pending_booking_confirmation",
-                    False
+                    False,
                 ),
 
-                "pending_cancellation_booking_id": result.get(
+                "pending_cancellation_booking_id": state_value(
                     "pending_cancellation_booking_id"
                 ),
 
-                "pending_booking_domain": result.get(
+                "pending_booking_domain": state_value(
                     "pending_booking_domain"
                 ),
 
-                "booking": result.get(
+                "booking": state_value(
                     "booking"
                 ),
-                
             },
         )
 
@@ -3931,6 +4010,19 @@ unsupported information.
 
             "destination_resolution": result.get(
                 "destination_resolution"
+            ),
+
+            "pending_clarification": result.get(
+                "pending_clarification"
+            ),
+
+            "pending_destination": result.get(
+                "pending_destination"
+            ),
+
+            "pending_destination_candidates": result.get(
+                "pending_destination_candidates",
+                [],
             ),
 
             "transport_options": result.get(
