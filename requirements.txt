@@ -26,3 +26,4 @@ pytest-asyncio
 
 alembic
 PyJWT
+bcrypt

@@ -450,7 +450,6 @@ class Tenant(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
-
 class User(Base):
     """
     Represents a user belonging to a tenant.
@@ -487,6 +486,11 @@ class User(Base):
         String(255),
         nullable=False,
         index=True,
+    )
+
+    password_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
     )
 
     name: Mapped[str] = mapped_column(
