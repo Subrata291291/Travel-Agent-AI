@@ -150,7 +150,7 @@ def test_compiled_transport_search_renders_authoritative_option_not_llm_text():
     assert result["transport_options"] == [option]
     assert result["transport_options"][0]["price"] == 13000.0
     assert result["selected_option_id"] is None
-    assert "Price: 13000.0 INR" in result["messages"][-1].content
+    assert "Price per traveller: 13000.0 INR" in result["messages"][-1].content
     assert "6500" not in result["messages"][-1].content
 
 
@@ -170,7 +170,7 @@ def test_valid_transport_selection_confirms_using_canonical_option():
 
     assert result["selected_option_id"] == "FLIGHT-1"
     assert result["pending_booking_confirmation"] is True
-    assert "Price: 13000.0 INR" in result["messages"][0].content
+    assert "Price per traveller: 13000.0 INR" in result["messages"][0].content
     assert "6500" not in result["messages"][0].content
 
 

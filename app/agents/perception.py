@@ -193,6 +193,57 @@ class PerceptionAgent:
         if re.search(r"\b(book|choose|select|pick|go with|take)\b", user_message.lower()):
             return match.group(0)
         return None
+
+    @staticmethod
+    def _context_for_perception(
+        conversation_history: list[dict],
+    ) -> list[dict[str, str]]:
+        """Keep recent user context and brief clarifications, not search inventory."""
+
+        context = []
+        clarification_phrases = (
+            "which one do you mean",
+            "which region",
+            "provide the region",
+            "provide the country",
+            "could you clarify",
+            "what dates",
+            "how many travellers",
+            "how many travelers",
+            "do you mean",
+            "do you want me to book",
+            "do you want me to reserve",
+        )
+        inventory_markers = re.compile(
+            r"available (?:hotel|transport) options|hotel id:|option id:|"
+            r"price per night:|amenities:|booking id:",
+            re.IGNORECASE,
+        )
+
+        for message in conversation_history[-12:]:
+            if not isinstance(message, dict):
+                continue
+
+            role = message.get("role")
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+
+            if role in {"human", "user"}:
+                context.append({"role": "user", "content": content})
+                continue
+
+            lowered = content.casefold()
+            is_clarification = (
+                len(content) <= 300
+                and "?" in content
+                and any(phrase in lowered for phrase in clarification_phrases)
+                and not inventory_markers.search(content)
+            )
+            if role == "assistant" and is_clarification:
+                context.append({"role": "assistant", "content": content})
+
+        return context[-8:]
     
     # ==============================================================
     # DETERMINISTIC: BOOKING DOMAIN
@@ -369,6 +420,10 @@ class PerceptionAgent:
         if conversation_history is None:
             conversation_history = []
 
+        perception_history = self._context_for_perception(
+            conversation_history
+        )
+
         selected_hotel_id = self._hotel_option_selection(user_message)
         if selected_hotel_id:
             return TripPerception(
@@ -477,9 +532,9 @@ You are the perception layer of a professional travel AI agent.
 Your job is to understand the user's CURRENT request and convert
 it into a structured travel request.
 
-Use the conversation history when necessary to understand
-follow-up messages and references to previously discussed
-information.
+Use recent conversation only when necessary to understand a short
+follow-up. If the current user message explicitly names a place, use that
+place as the destination and let it override older context.
 
 RULES:
 
@@ -487,6 +542,10 @@ RULES:
 
 - Use conversation history to resolve references
   to previous messages.
+
+- Never use a hotel/property name, provider name, or option ID from an
+  assistant search result as the user's destination.
+- Treat assistant search results as inventory data, not user intent.
 
 - If the user is answering a clarification question,
   combine the answer with the relevant previous context.
@@ -783,6 +842,7 @@ Valid option IDs may look like:
 - FLIGHT-1
 - TRAIN-1
 - BUS-1
+- provider-generated IDs such as off_... from a live flight search
 
 
 Examples:
@@ -830,6 +890,9 @@ OPTION ID RULES:
 
 - If the user selects a previously displayed transport
   option, preserve the exact option ID from the conversation.
+
+- Live provider option IDs may be long and may not use a FLIGHT- prefix.
+  Copy the exact displayed ID; never create a replacement ID.
 
 - If the user mentions an exact option ID such as
 HOTEL-1, HOTEL-2, HOTEL-3, FLIGHT-1, TRAIN-1, or BUS-1,
@@ -1026,9 +1089,9 @@ Examples:
 
 CONVERSATION CONTEXT:
 
-The previous conversation is:
+The relevant recent conversation is:
 
-{conversation_history}
+{perception_history}
 
 
 CURRENT USER MESSAGE:

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     fallback_llm_2: str = "gemini"
     fallback_llm_3: str = "openai"
 
+    # Duffel
+    duffel_api_key: str = ""
+    duffel_base_url: str = "https://api.duffel.com"
+    duffel_version: str = "v2"
+
+
     # =========================
     # Database
     # =========================
