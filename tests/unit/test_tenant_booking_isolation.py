@@ -1,5 +1,6 @@
 import pytest
 import hashlib
+from contextlib import contextmanager
 from langchain_core.messages import HumanMessage
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -89,6 +90,31 @@ def _selected_hotel() -> dict:
         "price_per_night": 100.0,
         "currency": "INR",
     }
+
+
+@contextmanager
+def _booking_api_client(db, user_id: str, tenant_id: str):
+    from fastapi.testclient import TestClient
+
+    from app.auth.dependencies import get_current_user
+    from app.core.tenant_context import TenantContext
+    from app.database.connection import get_db
+    from app.main import app
+
+    def override_db():
+        yield db
+
+    def override_user():
+        return TenantContext(user_id=user_id, tenant_id=tenant_id)
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = override_user
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_transport_booking_read_and_list_are_tenant_scoped(db_session_factory):
@@ -704,6 +730,9 @@ def test_booking_api_retrieves_transport_and_keeps_hotel_available(db_session_fa
                 foreign_response = client.get(
                     f"/api/v1/bookings/{transport.booking_id}"
                 )
+                foreign_hotel_response = client.get(
+                    f"/api/v1/bookings/{hotel.booking_id}"
+                )
         finally:
             app.dependency_overrides.pop(get_db, None)
             app.dependency_overrides.pop(get_current_user, None)
@@ -718,3 +747,76 @@ def test_booking_api_retrieves_transport_and_keeps_hotel_available(db_session_fa
         "hotel",
     }
     assert foreign_response.status_code == 404
+    assert foreign_hotel_response.status_code == 404
+
+
+def test_unified_cancellation_api_cancels_each_domain_and_handles_retries(
+    db_session_factory,
+):
+    with db_session_factory() as db:
+        transport = BookingService(db).create_booking(
+            _transport_request("tenant_a"), _transport_option()
+        )
+        hotel = HotelBookingService(db).create_booking(
+            _hotel_request("tenant_a"), _selected_hotel()
+        )
+
+        with _booking_api_client(db, "same-user-id", "tenant_a") as client:
+            transport_first = client.post(
+                f"/api/v1/bookings/{transport.booking_id}/cancel"
+            )
+            transport_retry = client.post(
+                f"/api/v1/bookings/{transport.booking_id}/cancel"
+            )
+            hotel_first = client.post(
+                f"/api/v1/bookings/{hotel.booking_id}/cancel"
+            )
+            hotel_retry = client.post(
+                f"/api/v1/bookings/{hotel.booking_id}/cancel"
+            )
+
+        for response, domain in (
+            (transport_first, "transport"),
+            (transport_retry, "transport"),
+            (hotel_first, "hotel"),
+            (hotel_retry, "hotel"),
+        ):
+            assert response.status_code == 200
+            assert response.json()["booking_domain"] == domain
+            assert response.json()["status"] == "cancelled"
+
+        assert "cancelled successfully" in transport_first.json()["message"]
+        assert "already cancelled" in transport_retry.json()["message"]
+        assert "cancelled successfully" in hotel_first.json()["message"]
+        assert "already cancelled" in hotel_retry.json()["message"]
+        assert db.query(Booking).filter_by(booking_id=transport.booking_id).count() == 1
+        assert db.query(HotelBooking).filter_by(booking_id=hotel.booking_id).count() == 1
+
+
+@pytest.mark.parametrize("domain", ["transport", "hotel"])
+@pytest.mark.parametrize(
+    ("user_id", "tenant_id"),
+    [("another-user", "tenant_a"), ("same-user-id", "tenant_b")],
+)
+def test_unified_cancellation_api_denies_other_user_or_tenant(
+    db_session_factory, domain, user_id, tenant_id
+):
+    with db_session_factory() as db:
+        if domain == "transport":
+            booking = BookingService(db).create_booking(
+                _transport_request("tenant_a"), _transport_option()
+            )
+        else:
+            booking = HotelBookingService(db).create_booking(
+                _hotel_request("tenant_a"), _selected_hotel()
+            )
+
+        with _booking_api_client(db, user_id, tenant_id) as client:
+            response = client.post(
+                f"/api/v1/bookings/{booking.booking_id}/cancel"
+            )
+
+        assert response.status_code == 404
+        service = BookingService(db) if domain == "transport" else HotelBookingService(db)
+        stored = service.get_booking(booking.booking_id, "same-user-id", "tenant_a")
+        assert stored.status == "confirmed"

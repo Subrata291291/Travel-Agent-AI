@@ -30,9 +30,9 @@ def get_my_bookings(
             ↓
         SQLAlchemy Session
             ↓
-        HotelBookingService
+        BookingQueryService
             ↓
-        HotelBookingRepository
+        Domain booking services and repositories
     """
 
     service = BookingQueryService(db)
@@ -91,7 +91,7 @@ def cancel_booking(
     db: Session = Depends(get_db),
 ):
     """
-    Cancel one hotel booking belonging to the
+    Cancel one transport or hotel booking belonging to the
     authenticated user inside the current tenant.
     """
 

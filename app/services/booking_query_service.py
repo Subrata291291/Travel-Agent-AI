@@ -41,11 +41,37 @@ class BookingQueryService:
         # IDs share a format across domains, so resolve ownership before cancelling.
         for domain, service in (("transport", self.transport), ("hotel", self.hotel)):
             try:
-                service.get_booking(booking_id, user_id, tenant_id)
+                current = service.get_booking(booking_id, user_id, tenant_id)
             except ValueError:
                 continue
-            return self._record(
+
+            already_cancelled = current.status == "cancelled"
+            if already_cancelled:
+                booking = current
+            else:
+                try:
+                    booking = service.cancel_booking(
+                        booking_id, user_id, tenant_id
+                    )
+                except ValueError:
+                    # A concurrent request may have completed the transition
+                    # after the initial read. Confirm the persisted state
+                    # before treating the operation as an idempotent retry.
+                    booking = service.get_booking(
+                        booking_id, user_id, tenant_id
+                    )
+                    if booking.status != "cancelled":
+                        raise
+                    already_cancelled = True
+            record = self._record(
                 domain,
-                service.cancel_booking(booking_id, user_id, tenant_id),
+                booking,
             )
+            domain_label = "Hotel booking" if domain == "hotel" else "Booking"
+            record["message"] = (
+                f"{domain_label} is already cancelled."
+                if already_cancelled
+                else f"{domain_label} cancelled successfully."
+            )
+            return record
         raise ValueError(f"Booking {booking_id} was not found.")
