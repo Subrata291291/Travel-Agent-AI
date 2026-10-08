@@ -4,11 +4,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
 from app.database.connection import get_db
-from app.schemas.hotel_booking import (
-    HotelBookingListResponse,
-    HotelBookingResponse,
-)
-from app.services.hotel_booking_service import HotelBookingService
+from app.services.booking_query_service import BookingQueryService
 
 
 router = APIRouter(
@@ -17,16 +13,13 @@ router = APIRouter(
 )
 
 
-@router.get(
-    "",
-    response_model=HotelBookingListResponse,
-)
+@router.get("")
 def get_my_bookings(
     context: TenantContext = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Return all hotel bookings belonging to the
+    Return all transport and hotel bookings belonging to the
     authenticated user inside the current tenant.
 
     Database ownership:
@@ -42,7 +35,7 @@ def get_my_bookings(
         HotelBookingRepository
     """
 
-    service = HotelBookingService(db)
+    service = BookingQueryService(db)
 
     try:
         bookings = service.get_user_bookings(
@@ -64,21 +57,18 @@ def get_my_bookings(
         ) from exc
 
 
-@router.get(
-    "/{booking_id}",
-    response_model=HotelBookingResponse,
-)
+@router.get("/{booking_id}")
 def get_booking(
     booking_id: str,
     context: TenantContext = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Return one hotel booking belonging to the
+    Return one transport or hotel booking belonging to the
     authenticated user inside the current tenant.
     """
 
-    service = HotelBookingService(db)
+    service = BookingQueryService(db)
 
     try:
         return service.get_booking(
@@ -94,10 +84,7 @@ def get_booking(
         ) from exc
 
 
-@router.post(
-    "/{booking_id}/cancel",
-    response_model=HotelBookingResponse,
-)
+@router.post("/{booking_id}/cancel")
 def cancel_booking(
     booking_id: str,
     context: TenantContext = Depends(get_current_user),
@@ -108,7 +95,7 @@ def cancel_booking(
     authenticated user inside the current tenant.
     """
 
-    service = HotelBookingService(db)
+    service = BookingQueryService(db)
 
     try:
         return service.cancel_booking(

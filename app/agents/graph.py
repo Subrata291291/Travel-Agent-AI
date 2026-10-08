@@ -367,6 +367,11 @@ class TravelAgentGraph:
         )
 
         graph.add_node(
+            "transport_existing_booking",
+            self.transport_existing_booking_node,
+        )
+
+        graph.add_node(
             "booking_already_exists",
             self.booking_already_exists_node,
         )
@@ -457,6 +462,7 @@ class TravelAgentGraph:
                 "hotel_booking_confirmation": "hotel_booking_confirmation",
                 "hotel_booking_execution": "hotel_booking_execution",
                 "hotel_existing_booking": "hotel_existing_booking",
+                "transport_existing_booking": "transport_existing_booking",
                 "get_booking_details": "get_booking_details",
                 "execute_existing_cancellation": "execute_existing_cancellation",
                 "cancel_cancellation_request": "cancel_cancellation_request",
@@ -538,6 +544,11 @@ class TravelAgentGraph:
 
         graph.add_edge(
             "hotel_existing_booking",
+            END,
+        )
+
+        graph.add_edge(
+            "transport_existing_booking",
             END,
         )
 
@@ -1182,7 +1193,11 @@ class TravelAgentGraph:
                     "BUS-",
                 )
             ):
-                return "new_booking"
+                # Check the persisted booking intent before offering a new
+                # confirmation. The stable transport identity intentionally
+                # spans chat sessions, so workflow booking.session_id cannot
+                # be used as the retry discriminator here.
+                return "transport_existing_booking"
 
             # Unknown option type
             return "new_booking"
@@ -2008,6 +2023,77 @@ class TravelAgentGraph:
             "selected_option_id": None,
             "pending_booking_confirmation": False,
             "pending_booking_domain": None,
+        }
+
+    def transport_existing_booking_node(
+        self,
+        state: TravelState,
+        runtime: Runtime[GraphContext],
+    ):
+        """Resolve an existing transport intent before prompting to confirm."""
+        selected_option_id = (
+            state.get("perception").selected_option_id
+            if state.get("perception")
+            else None
+        ) or state.get("selected_option_id")
+
+        selected_option = next(
+            (
+                option
+                for option in state.get("transport_options", [])
+                if option.get("option_id") == selected_option_id
+            ),
+            None,
+        )
+
+        if not selected_option:
+            return self.booking_confirmation_node(state)
+
+        perception = state.get("perception")
+        request = BookingRequest(
+            user_id=state["user_id"],
+            tenant_id=state["tenant_id"],
+            session_id=state["session_id"],
+            option_id=selected_option_id,
+            travellers=perception.travellers if perception else 1,
+        )
+
+        try:
+            booking = BookingService(runtime.context.db).get_existing_booking(
+                request=request,
+                selected_option=selected_option,
+            )
+        except Exception:
+            return {
+                "messages": [AIMessage(content="I couldn't verify whether this transport booking already exists. Please try again.")],
+                "selected_option_id": None,
+                "pending_booking_confirmation": False,
+                "pending_booking_domain": "transport",
+            }
+
+        if not booking:
+            return self.booking_confirmation_node(state)
+
+        if booking.status == "confirmed":
+            message = (
+                "Your transport booking is already confirmed.\n\n"
+                f"Booking ID: {booking.booking_id}\n"
+                f"Option: {booking.option_id}\n"
+                f"Status: {booking.status}"
+            )
+        else:
+            message = (
+                f"This transport booking is {booking.status}. It is not currently confirmed.\n\n"
+                f"Booking ID: {booking.booking_id}\n"
+                f"Status: {booking.status}"
+            )
+
+        return {
+            "messages": [AIMessage(content=message)],
+            "booking": booking.model_dump(mode="json"),
+            "selected_option_id": None,
+            "pending_booking_confirmation": False,
+            "pending_booking_domain": "transport",
         }
 
     def hotel_booking_execution_node(

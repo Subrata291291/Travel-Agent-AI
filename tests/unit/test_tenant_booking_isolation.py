@@ -9,6 +9,7 @@ from app.database.connection import Base
 from app.database.models import Booking, HotelBooking, Tenant
 from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
+from app.services.booking_query_service import BookingQueryService
 from app.schemas.booking import BookingRequest
 from app.schemas.hotel_booking import HotelBookingRequest
 from app.agents.graph import GraphContext, TravelAgentGraph
@@ -469,3 +470,251 @@ def test_compiled_hotel_confirmation_creates_new_booking_and_reports_db_status(
     assert "already confirmed" not in cancelled_answer
     assert "hotel booking is cancelled" in cancelled_answer
     assert "status: cancelled" in cancelled_answer
+
+
+def test_compiled_transport_confirmation_retry_returns_existing_booking(test_db):
+    test_db.add(Tenant(tenant_id="tenant_demo", name="Demo", slug="demo"))
+    test_db.commit()
+    option = _transport_option()
+
+    class Memory:
+        def get_messages(self, session_id, tenant_id):
+            return []
+
+    class Perception:
+        def understand(self, message, history):
+            return TripPerception(
+                intent="book_trip",
+                destination="B",
+                travellers=1,
+                selected_option_id="TRAIN-1",
+                confirmation="yes",
+            )
+
+    graph = TravelAgentGraph()
+    graph.memory = Memory()
+    graph.perception_agent = Perception()
+    state = {
+        "user_message": "Yes, book this option.",
+        "user_id": "same-user-id",
+        "tenant_id": "tenant_demo",
+        "session_id": "transport-retry-test",
+        "messages": [HumanMessage(content="Yes, book this option.")],
+        "perception": None,
+        "plan": None,
+        "destination_resolution": None,
+        "clarification_needed": False,
+        "pending_clarification": None,
+        "pending_destination": None,
+        "pending_destination_candidates": [],
+        "tool_context": None,
+        "trip_context": None,
+        "transport_options": [option],
+        "hotel_options": [],
+        "hotel_search_performed": False,
+        "transport_search_performed": False,
+        "selected_option_id": "TRAIN-1",
+        "pending_booking_confirmation": True,
+        "pending_booking_domain": "transport",
+        "pending_cancellation_booking_id": None,
+        "booking": None,
+        "answer": None,
+    }
+
+    first = graph.graph.invoke(state, context=GraphContext(db=test_db))
+    booking_id = first["booking"]["booking_id"]
+    assert first["booking"]["status"] == "confirmed"
+    assert first["pending_booking_confirmation"] is False
+
+    retry = graph.graph.invoke(
+        {
+            **first,
+            "user_message": "Yes, book this option.",
+            "messages": [HumanMessage(content="Yes, book this option.")],
+        },
+        context=GraphContext(db=test_db),
+    )
+    answer = retry["messages"][-1].content
+    assert retry["booking"]["booking_id"] == booking_id
+    assert retry["booking"]["status"] == "confirmed"
+    assert retry["pending_booking_confirmation"] is False
+    assert retry["selected_option_id"] is None
+    assert "already confirmed" in answer.lower()
+    assert "Do you want me to book this option?" not in answer
+    assert test_db.query(Booking).filter_by(session_id="transport-retry-test").count() == 1
+
+    BookingService(test_db).cancel_booking(
+        booking_id, "same-user-id", "tenant_demo"
+    )
+    cancelled = graph.graph.invoke(
+        {
+            **first,
+            "user_message": "Yes, book this option.",
+            "messages": [HumanMessage(content="Yes, book this option.")],
+        },
+        context=GraphContext(db=test_db),
+    )
+    cancelled_answer = cancelled["messages"][-1].content.lower()
+    assert cancelled["booking"]["status"] == "cancelled"
+    assert cancelled["pending_booking_confirmation"] is False
+    assert "already confirmed" not in cancelled_answer
+    assert "status: cancelled" in cancelled_answer
+
+
+def test_repeated_transport_confirmation_reuses_existing_cross_session_booking(test_db):
+    test_db.add(Tenant(tenant_id="tenant_demo", name="Demo", slug="demo"))
+    test_db.commit()
+    option = _transport_option()
+    existing = BookingService(test_db).create_booking(
+        _transport_request("tenant_demo").model_copy(
+            update={"user_id": "user_demo", "session_id": "transport-booking-live-001", "travellers": 2}
+        ),
+        {**option, "price": 4200.0},
+    )
+
+    class Memory:
+        def get_messages(self, session_id, tenant_id):
+            return []
+
+    class Perception:
+        def understand(self, message, history):
+            assert message == "Yes, confirm and book it."
+            return TripPerception(
+                intent="book_trip",
+                destination="B",
+                travellers=2,
+                selected_option_id="TRAIN-1",
+                confirmation="yes",
+            )
+
+    graph = TravelAgentGraph()
+    graph.memory = Memory()
+    graph.perception_agent = Perception()
+    state = {
+        "user_message": "Yes, confirm and book it.",
+        "user_id": "user_demo",
+        "tenant_id": "tenant_demo",
+        "session_id": "transport-retry-live-001",
+        "messages": [HumanMessage(content="Yes, confirm and book it.")],
+        "perception": None,
+        "plan": None,
+        "destination_resolution": None,
+        "clarification_needed": False,
+        "pending_clarification": None,
+        "pending_destination": None,
+        "pending_destination_candidates": [],
+        "tool_context": None,
+        "trip_context": None,
+        "transport_options": [{**option, "price": 4200.0}],
+        "hotel_options": [],
+        "hotel_search_performed": False,
+        "transport_search_performed": False,
+        "selected_option_id": "TRAIN-1",
+        "pending_booking_confirmation": False,
+        "pending_booking_domain": "transport",
+        "pending_cancellation_booking_id": None,
+        "booking": existing.model_dump(mode="json"),
+        "answer": None,
+    }
+
+    first = graph.graph.invoke(state, context=GraphContext(db=test_db))
+    second = graph.graph.invoke(
+        {
+            **first,
+            "user_message": "Yes, confirm and book it.",
+            "messages": [HumanMessage(content="Yes, confirm and book it.")],
+        },
+        context=GraphContext(db=test_db),
+    )
+
+    for response in (first, second):
+        answer = response["messages"][-1].content.lower()
+        assert response["booking"]["booking_id"] == existing.booking_id
+        assert response["booking"]["status"] == "confirmed"
+        assert response["pending_booking_confirmation"] is False
+        assert response["selected_option_id"] is None
+        assert response["pending_booking_domain"] == "transport"
+        assert "already confirmed" in answer
+        assert "do you want me to book this option?" not in answer
+
+    assert test_db.query(Booking).filter_by(
+        user_id="user_demo", tenant_id="tenant_demo", option_id="TRAIN-1"
+    ).count() == 1
+
+
+def test_unified_booking_query_service_returns_both_domains_and_is_tenant_scoped(
+    db_session_factory,
+):
+    with db_session_factory() as db:
+        transport = BookingService(db).create_booking(
+            _transport_request("tenant_a"), _transport_option()
+        )
+        hotel = HotelBookingService(db).create_booking(
+            _hotel_request("tenant_a"), _selected_hotel()
+        )
+        facade = BookingQueryService(db)
+
+        assert facade.get_booking(
+            transport.booking_id, "same-user-id", "tenant_a"
+        )["booking_domain"] == "transport"
+        assert facade.get_booking(
+            hotel.booking_id, "same-user-id", "tenant_a"
+        )["booking_domain"] == "hotel"
+        assert {item["booking_domain"] for item in facade.get_user_bookings(
+            "same-user-id", "tenant_a"
+        )} == {"transport", "hotel"}
+        with pytest.raises(ValueError, match="not found"):
+            facade.get_booking(transport.booking_id, "same-user-id", "tenant_b")
+
+
+def test_booking_api_retrieves_transport_and_keeps_hotel_available(db_session_factory):
+    from fastapi.testclient import TestClient
+
+    from app.auth.dependencies import get_current_user
+    from app.core.tenant_context import TenantContext
+    from app.database.connection import get_db
+    from app.main import app
+
+    with db_session_factory() as db:
+        transport = BookingService(db).create_booking(
+            _transport_request("tenant_a"), _transport_option()
+        )
+        hotel = HotelBookingService(db).create_booking(
+            _hotel_request("tenant_a"), _selected_hotel()
+        )
+
+        def override_db():
+            yield db
+
+        tenant = {"id": "tenant_a"}
+
+        def override_user():
+            return TenantContext(user_id="same-user-id", tenant_id=tenant["id"])
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_user] = override_user
+        try:
+            with TestClient(app) as client:
+                transport_response = client.get(
+                    f"/api/v1/bookings/{transport.booking_id}"
+                )
+                hotel_response = client.get(f"/api/v1/bookings/{hotel.booking_id}")
+                list_response = client.get("/api/v1/bookings")
+                tenant["id"] = "tenant_b"
+                foreign_response = client.get(
+                    f"/api/v1/bookings/{transport.booking_id}"
+                )
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            app.dependency_overrides.pop(get_current_user, None)
+
+    assert transport_response.status_code == 200
+    assert transport_response.json()["booking_domain"] == "transport"
+    assert hotel_response.status_code == 200
+    assert hotel_response.json()["booking_domain"] == "hotel"
+    assert list_response.status_code == 200
+    assert {item["booking_domain"] for item in list_response.json()["bookings"]} == {
+        "transport",
+        "hotel",
+    }
+    assert foreign_response.status_code == 404
