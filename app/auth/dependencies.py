@@ -3,10 +3,11 @@ from collections.abc import Callable
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pytest import Session
 
 from app.auth.jwt import decode_access_token
 from app.core.tenant_context import TenantContext
-from app.database.connection import SessionLocal
+from app.database.connection import SessionLocal, get_db
 from app.database.models import User
 
 
@@ -82,6 +83,7 @@ def get_current_context(
 
 def get_current_user(
     context: TenantContext = Depends(get_current_context),
+    db: Session = Depends(get_db),
 ) -> TenantContext:
     """
     Resolve the authenticated user from the database.
@@ -96,8 +98,6 @@ def get_current_user(
     This prevents an old JWT from retaining privileges after
     a user's role or account status has been changed.
     """
-
-    db = SessionLocal()
 
     try:
         user = (

@@ -1,10 +1,7 @@
 from uuid import uuid4
 import hashlib
 
-from app.database.connection import (
-    SessionLocal,
-    init_db,
-)
+from sqlalchemy.orm import Session
 
 from app.database.models import Booking
 
@@ -41,9 +38,8 @@ class BookingService:
       booking confirmation.
     """
 
-    def __init__(self):
-        # Development-time database bootstrap.
-        init_db()
+    def __init__(self, db: Session):
+        self.db = db
 
     # ========================================================
     # INTERNAL HELPERS
@@ -187,26 +183,21 @@ class BookingService:
         the same existing booking.
         """
 
-        db = SessionLocal()
+        db = self.db
 
-        try:
-            repository = BookingRepository(db)
+        repository = BookingRepository(db)
 
-            booking = self._find_existing_booking(
-                repository,
-                request,
-                selected_option,
-            )
+        booking = self._find_existing_booking(
+            repository,
+            request,
+            selected_option,
+        )
 
-            if not booking:
-                return None
+        if not booking:
+            return None
 
-            return self._to_response(
-                booking
-            )
+        return self._to_response(booking)
 
-        finally:
-            db.close()
 
     def create_booking(
         self,
@@ -244,7 +235,7 @@ class BookingService:
         # 3. Database session
         # ----------------------------------------------------
 
-        db = SessionLocal()
+        db = self.db
 
         try:
             repository = BookingRepository(db)
@@ -416,8 +407,6 @@ class BookingService:
             db.rollback()
             raise
 
-        finally:
-            db.close()
 
     # ========================================================
     # GET BOOKING BY ID
@@ -439,7 +428,7 @@ class BookingService:
         - The repository performs the database lookup.
         """
 
-        db = SessionLocal()
+        db = self.db
 
         try:
             repository = BookingRepository(db)
@@ -471,8 +460,6 @@ class BookingService:
             db.rollback()
             raise
 
-        finally:
-            db.close()
 
     # ========================================================
     # CANCEL BOOKING
@@ -495,7 +482,7 @@ class BookingService:
           never by the LLM.
         """
 
-        db = SessionLocal()
+        db = self.db
 
         try:
             repository = BookingRepository(db)
@@ -560,8 +547,6 @@ class BookingService:
             db.rollback()
             raise
 
-        finally:
-            db.close()
 
     # ========================================================
     # GET USER BOOKINGS
@@ -573,22 +558,17 @@ class BookingService:
         tenant_id: str,
     ) -> list[BookingResponse]:
 
-        db = SessionLocal()
+        db = self.db
 
-        try:
-            repository = BookingRepository(db)
+        repository = BookingRepository(db)
 
-            bookings = repository.get_user_bookings(
-                user_id=user_id,
-                tenant_id=tenant_id
-            )
+        bookings = repository.get_user_bookings(
+            user_id=user_id,
+            tenant_id=tenant_id
+        )
 
-            return [
-                self._to_response(
-                    booking
-                )
-                for booking in bookings
-            ]
+        return [
+            self._to_response(booking)
+            for booking in bookings
+        ]
 
-        finally:
-            db.close()

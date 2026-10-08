@@ -10,6 +10,37 @@ class GeocodingTool:
     BASE_URL = (
         "https://geocoding-api.open-meteo.com/v1/search"
     )
+    GET_URL = (
+        "https://geocoding-api.open-meteo.com/v1/get"
+    )
+
+    @staticmethod
+    def _candidate(result: dict) -> dict:
+        return {
+            "id": result.get("id"),
+            "name": result.get("name"),
+            "latitude": result.get("latitude"),
+            "longitude": result.get("longitude"),
+            "country": result.get("country"),
+            "country_code": result.get("country_code"),
+            "admin1": result.get("admin1"),
+            "admin2": result.get("admin2"),
+            "admin3": result.get("admin3"),
+            "admin4": result.get("admin4"),
+            "admin1_id": result.get("admin1_id"),
+            "timezone": result.get("timezone"),
+            "feature_code": result.get("feature_code"),
+            "population": result.get("population"),
+        }
+
+    def get_by_id(self, location_id: int) -> dict:
+        response = requests.get(
+            self.GET_URL,
+            params={"id": location_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return self._candidate(response.json())
 
     def search(
         self,
@@ -76,7 +107,7 @@ class GeocodingTool:
 
         params = {
             "name": location,
-            "count": 10,
+            "count": 100,
             "language": "en",
             "format": "json",
         }
@@ -99,32 +130,6 @@ class GeocodingTool:
         candidates = []
 
         for result in results:
-
-            candidates.append(
-                {
-                    "name": result.get("name"),
-                    "latitude": result.get(
-                        "latitude"
-                    ),
-                    "longitude": result.get(
-                        "longitude"
-                    ),
-                    "country": result.get(
-                        "country"
-                    ),
-                    "country_code": result.get(
-                        "country_code"
-                    ),
-                    "admin1": result.get(
-                        "admin1"
-                    ),
-                    "admin2": result.get(
-                        "admin2"
-                    ),
-                    "timezone": result.get(
-                        "timezone"
-                    ),
-                }
-            )
+            candidates.append(self._candidate(result))
 
         return candidates

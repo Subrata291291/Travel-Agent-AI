@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.agents.graph import TravelAgentGraph
 from app.api.dependencies import get_tenant_context
+from app.database.connection import get_db
 from app.core.tenant_context import TenantContext
 
 
@@ -76,6 +78,7 @@ travel_agent_graph = TravelAgentGraph()
 def chat(
     request: ChatRequest,
     context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
 ):
     """
     Send a message to the Travel Agent.
@@ -89,6 +92,17 @@ def chat(
         user_id=context.user_id,
         session_id=request.session_id,
         tenant_id=context.tenant_id,
+        db=db,
+    )
+
+    booking = result.get("booking")
+    booking_domain = (
+        result.get("pending_booking_domain")
+        or (
+            "hotel"
+            if isinstance(booking, dict) and booking.get("hotel_id")
+            else None
+        )
     )
 
     return ChatResponse(
@@ -136,14 +150,6 @@ def chat(
             "pending_booking_domain",
         ),
 
-        booking=result.get("booking"),
-
-        booking_domain=(
-            result.get("pending_booking_domain")
-            or (
-                "hotel"
-                if result.get("booking", {}).get("hotel_id")
-                else None
-            )
-        ),
+        booking=booking,
+        booking_domain=booking_domain,
     )

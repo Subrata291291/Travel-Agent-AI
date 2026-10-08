@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
+from app.database.connection import get_db
 from app.schemas.hotel_booking import (
     HotelBookingListResponse,
     HotelBookingResponse,
@@ -15,23 +17,35 @@ router = APIRouter(
 )
 
 
-hotel_booking_service = HotelBookingService()
-
-
 @router.get(
     "",
     response_model=HotelBookingListResponse,
 )
 def get_my_bookings(
-    context: TenantContext = Depends(get_current_user)
+    context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Return all hotel bookings belonging to the
     authenticated user inside the current tenant.
+
+    Database ownership:
+
+        FastAPI
+            ↓
+        get_db()
+            ↓
+        SQLAlchemy Session
+            ↓
+        HotelBookingService
+            ↓
+        HotelBookingRepository
     """
 
+    service = HotelBookingService(db)
+
     try:
-        bookings = hotel_booking_service.get_user_bookings(
+        bookings = service.get_user_bookings(
             user_id=context.user_id,
             tenant_id=context.tenant_id,
         )
@@ -57,14 +71,17 @@ def get_my_bookings(
 def get_booking(
     booking_id: str,
     context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Return one hotel booking belonging to the
     authenticated user inside the current tenant.
     """
 
+    service = HotelBookingService(db)
+
     try:
-        return hotel_booking_service.get_booking(
+        return service.get_booking(
             booking_id=booking_id,
             user_id=context.user_id,
             tenant_id=context.tenant_id,
@@ -76,6 +93,7 @@ def get_booking(
             detail=str(exc),
         ) from exc
 
+
 @router.post(
     "/{booking_id}/cancel",
     response_model=HotelBookingResponse,
@@ -83,13 +101,22 @@ def get_booking(
 def cancel_booking(
     booking_id: str,
     context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    """
+    Cancel one hotel booking belonging to the
+    authenticated user inside the current tenant.
+    """
+
+    service = HotelBookingService(db)
+
     try:
-        return hotel_booking_service.cancel_booking(
+        return service.cancel_booking(
             booking_id=booking_id,
             user_id=context.user_id,
             tenant_id=context.tenant_id,
         )
+
     except ValueError as exc:
         raise HTTPException(
             status_code=404,

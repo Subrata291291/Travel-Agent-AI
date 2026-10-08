@@ -1,15 +1,11 @@
-from langchain_core.tools import tool
+from sqlalchemy.orm import Session
 
 from app.schemas.booking import BookingRequest
 from app.services.booking_service import BookingService
 
 
-# One service instance for the application process.
-_booking_service = BookingService()
-
-
-@tool
 def book_transport(
+    db: Session,
     user_id: str,
     tenant_id: str,
     session_id: str,
@@ -64,7 +60,7 @@ def book_transport(
         travellers=travellers,
     )
 
-    response = _booking_service.create_booking(
+    response = BookingService(db).create_booking(
         request=request,
         selected_option=selected_option,
     )

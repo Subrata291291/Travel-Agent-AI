@@ -529,9 +529,6 @@ class User(Base):
     )
 
 
-
-    __tablename__ = "users"
-
     user_id: Mapped[str] = mapped_column(
         String(64),
         primary_key=True,

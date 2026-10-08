@@ -5,7 +5,7 @@ from app.core.tenant_context import TenantContext
 
 
 router = APIRouter(
-    prefix="/api/v1/admin",
+    prefix="/admin",
     tags=["admin"],
 )
 

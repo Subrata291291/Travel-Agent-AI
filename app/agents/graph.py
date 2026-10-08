@@ -1,5 +1,8 @@
+from dataclasses import dataclass
 from typing import Annotated, TypedDict
 import json
+
+from sqlalchemy.orm import Session
 
 from langchain_core.messages import (
     AIMessage,
@@ -8,6 +11,7 @@ from langchain_core.messages import (
 )
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.runtime import Runtime
 from langgraph.graph.message import add_messages
 
 from app.agents.perception import PerceptionAgent
@@ -102,6 +106,10 @@ class TravelState(TypedDict):
 # TRAVEL AGENT GRAPH
 # ============================================================
 
+@dataclass
+class GraphContext:
+    db: Session
+
 class TravelAgentGraph:
     """
     Main LangGraph orchestration layer.
@@ -152,18 +160,6 @@ class TravelAgentGraph:
         self.tools = get_all_tools()
 
         # ----------------------------------------------------
-        # Booking service
-        # ----------------------------------------------------
-
-        self.booking_service = BookingService()
-
-        #----------------------------------------------------
-        # Hotel booking service 
-        #----------------------------------------------------
-
-        self.hotel_booking_service = HotelBookingService()
-
-        # ----------------------------------------------------
         # Build graph
         # ----------------------------------------------------
 
@@ -178,7 +174,10 @@ class TravelAgentGraph:
         Build and compile the LangGraph workflow.
         """
 
-        graph = StateGraph(TravelState)
+        graph = StateGraph(
+            TravelState,
+            context_schema=GraphContext,
+        )
 
         # ----------------------------------------------------
         # Register nodes
@@ -461,7 +460,6 @@ class TravelAgentGraph:
         )
 
         return graph.compile()
-
 
     def _build_trip_context(
         self,
@@ -1451,6 +1449,7 @@ class TravelAgentGraph:
     def hotel_booking_execution_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ):
         """
         Execute a hotel booking only after explicit confirmation.
@@ -1579,7 +1578,7 @@ class TravelAgentGraph:
         # --------------------------------------------------------
 
         try:
-            booking = self.hotel_booking_service.create_booking(
+            booking = HotelBookingService(runtime.context.db).create_booking(
                 request=request,
                 selected_hotel=selected_hotel,
             )
@@ -1703,6 +1702,7 @@ class TravelAgentGraph:
     def get_bookings_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ):
         """
         Retrieve all bookings belonging to the current user.
@@ -1766,7 +1766,7 @@ class TravelAgentGraph:
         if booking_domain == "hotel":
 
             bookings = (
-                self.hotel_booking_service.get_user_bookings(
+                HotelBookingService(runtime.context.db).get_user_bookings(
                     user_id=user_id,
                     tenant_id=state["tenant_id"],
                 )
@@ -1775,7 +1775,7 @@ class TravelAgentGraph:
         elif booking_domain == "transport":
 
             bookings = (
-                self.booking_service.get_user_bookings(
+                BookingService(runtime.context.db).get_user_bookings(
                     user_id=user_id,
                     tenant_id=state["tenant_id"],
                 )
@@ -1797,7 +1797,7 @@ class TravelAgentGraph:
             if booking_domain == "hotel":
 
                 bookings = (
-                    self.hotel_booking_service.get_user_bookings(
+                    HotelBookingService(runtime.context.db).get_user_bookings(
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
                     )
@@ -1814,14 +1814,14 @@ class TravelAgentGraph:
                 # --------------------------------------------------------
 
                 transport_bookings = (
-                    self.booking_service.get_user_bookings(
+                    BookingService(runtime.context.db).get_user_bookings(
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
                     )
                 )
 
                 hotel_bookings = (
-                    self.hotel_booking_service.get_user_bookings(
+                    HotelBookingService(runtime.context.db).get_user_bookings(
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
                     )
@@ -2193,6 +2193,7 @@ class TravelAgentGraph:
     def get_booking_details_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ) -> TravelState:
         
         """
@@ -2224,7 +2225,7 @@ class TravelAgentGraph:
 
         try:
             hotel_booking = (
-                self.hotel_booking_service.get_booking(
+                HotelBookingService(runtime.context.db).get_booking(
                     booking_id,
                     user_id,
                     state["tenant_id"],
@@ -2267,7 +2268,7 @@ class TravelAgentGraph:
         # ======================================================
 
         try:
-            booking = self.booking_service.get_booking(
+            booking = BookingService(runtime.context.db).get_booking(
                 booking_id,
                 user_id,
                 state["tenant_id"],
@@ -2317,6 +2318,7 @@ class TravelAgentGraph:
     def execute_existing_cancellation_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ):
         """
         Cancel an already-created booking.
@@ -2429,7 +2431,7 @@ class TravelAgentGraph:
             try:
 
                 hotel_booking = (
-                    self.hotel_booking_service.get_booking(
+                    HotelBookingService(runtime.context.db).get_booking(
                         booking_id=booking_id,
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
@@ -2447,7 +2449,7 @@ class TravelAgentGraph:
             if hotel_booking:
 
                 cancelled_booking = (
-                    self.hotel_booking_service.cancel_booking(
+                    HotelBookingService(runtime.context.db).cancel_booking(
                         booking_id=booking_id,
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
@@ -2487,7 +2489,7 @@ class TravelAgentGraph:
             else:
 
                 cancelled_booking = (
-                    self.booking_service.cancel_booking(
+                    BookingService(runtime.context.db).cancel_booking(
                         booking_id=booking_id,
                         user_id=user_id,
                         tenant_id=state["tenant_id"],
@@ -2574,6 +2576,7 @@ class TravelAgentGraph:
     def cancel_booking_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ) -> TravelState:
         """
         Start cancellation of an existing booking.
@@ -2629,7 +2632,7 @@ class TravelAgentGraph:
 
         try:
             hotel_booking = (
-                self.hotel_booking_service.get_booking(
+                HotelBookingService(runtime.context.db).get_booking(
                     booking_id,
                     user_id,
                     state["tenant_id"],
@@ -2683,7 +2686,7 @@ class TravelAgentGraph:
         # ====================================================
 
         try:
-            booking = self.booking_service.get_booking(
+            booking = BookingService(runtime.context.db).get_booking(
                 booking_id,
                 user_id,
                 state["tenant_id"],
@@ -2904,6 +2907,7 @@ class TravelAgentGraph:
     def booking_execution_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext],
     ):
         """
         Execute a confirmed transport booking.
@@ -3072,7 +3076,7 @@ class TravelAgentGraph:
         try:
 
             existing_booking = (
-                self.booking_service.get_existing_booking(
+                BookingService(runtime.context.db).get_existing_booking(
                     request=request,
                     selected_option=selected_option,
                 )
@@ -3146,7 +3150,7 @@ class TravelAgentGraph:
         try:
 
             booking = (
-                self.booking_service.create_booking(
+                BookingService(runtime.context.db).create_booking(
                     request=request,
                     selected_option=selected_option,
                 )
@@ -3726,6 +3730,7 @@ unsupported information.
         user_id: str,
         session_id: str,
         tenant_id: str,
+        db: Session,
     ):
         """
         Execute one complete user turn.
@@ -3896,7 +3901,8 @@ unsupported information.
         # ----------------------------------------------------
 
         result = self.graph.invoke(
-            initial_state
+            initial_state,
+            context=GraphContext(db=db),
         )
 
         def state_value(
@@ -4153,3 +4159,4 @@ unsupported information.
                 else []
             ),
         )
+

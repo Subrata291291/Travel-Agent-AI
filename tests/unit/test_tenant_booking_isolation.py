@@ -5,8 +5,6 @@ from sqlalchemy.pool import StaticPool
 
 from app.database.connection import Base
 from app.database.models import Booking, HotelBooking, Tenant
-from app.services import booking_service as booking_service_module
-from app.services import hotel_booking_service as hotel_booking_service_module
 from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
 from app.schemas.booking import BookingRequest
@@ -14,7 +12,7 @@ from app.schemas.hotel_booking import HotelBookingRequest
 
 
 @pytest.fixture
-def db_session_factory(monkeypatch):
+def db_session_factory():
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -35,9 +33,6 @@ def db_session_factory(monkeypatch):
         )
         db.commit()
 
-    monkeypatch.setattr(booking_service_module, "init_db", lambda: None)
-    monkeypatch.setattr(booking_service_module, "SessionLocal", session_factory)
-    monkeypatch.setattr(hotel_booking_service_module, "SessionLocal", session_factory)
     yield session_factory
     Base.metadata.drop_all(engine)
     engine.dispose()
@@ -92,31 +87,33 @@ def _selected_hotel() -> dict:
 
 
 def test_transport_booking_read_and_list_are_tenant_scoped(db_session_factory):
-    service = BookingService()
-    option = _transport_option()
-    tenant_a = service.create_booking(_transport_request("tenant_a"), option)
-    tenant_b = service.create_booking(_transport_request("tenant_b"), option)
+    with db_session_factory() as db:
+        service = BookingService(db)
+        option = _transport_option()
+        tenant_a = service.create_booking(_transport_request("tenant_a"), option)
+        tenant_b = service.create_booking(_transport_request("tenant_b"), option)
 
-    assert tenant_a.booking_id != tenant_b.booking_id
-    assert [
-        booking.booking_id
-        for booking in service.get_user_bookings("same-user-id", "tenant_a")
-    ] == [tenant_a.booking_id]
-    with pytest.raises(ValueError, match="not found"):
-        service.get_booking(tenant_a.booking_id, "same-user-id", "tenant_b")
+        assert tenant_a.booking_id != tenant_b.booking_id
+        assert [
+            booking.booking_id
+            for booking in service.get_user_bookings("same-user-id", "tenant_a")
+        ] == [tenant_a.booking_id]
+        with pytest.raises(ValueError, match="not found"):
+            service.get_booking(tenant_a.booking_id, "same-user-id", "tenant_b")
 
 
 def test_transport_cancellation_from_other_tenant_does_not_change_status(
     db_session_factory,
 ):
-    service = BookingService()
-    booking = service.create_booking(
-        _transport_request("tenant_a"),
-        _transport_option(),
-    )
+    with db_session_factory() as db:
+        service = BookingService(db)
+        booking = service.create_booking(
+            _transport_request("tenant_a"),
+            _transport_option(),
+        )
 
-    with pytest.raises(ValueError, match="not found"):
-        service.cancel_booking(booking.booking_id, "same-user-id", "tenant_b")
+        with pytest.raises(ValueError, match="not found"):
+            service.cancel_booking(booking.booking_id, "same-user-id", "tenant_b")
 
     with db_session_factory() as db:
         stored = db.scalar(
@@ -126,48 +123,51 @@ def test_transport_cancellation_from_other_tenant_does_not_change_status(
 
 
 def test_transport_idempotency_is_tenant_scoped(db_session_factory):
-    service = BookingService()
-    option = _transport_option()
-    tenant_a = service.create_booking(_transport_request("tenant_a"), option)
-    tenant_b = service.create_booking(_transport_request("tenant_b"), option)
-    repeated_tenant_a = service.create_booking(
-        _transport_request("tenant_a").model_copy(
-            update={"session_id": "another-session"}
-        ),
-        option,
-    )
+    with db_session_factory() as db:
+        service = BookingService(db)
+        option = _transport_option()
+        tenant_a = service.create_booking(_transport_request("tenant_a"), option)
+        tenant_b = service.create_booking(_transport_request("tenant_b"), option)
+        repeated_tenant_a = service.create_booking(
+            _transport_request("tenant_a").model_copy(
+                update={"session_id": "another-session"}
+            ),
+            option,
+        )
 
-    assert tenant_b.booking_id != tenant_a.booking_id
-    assert tenant_b.user_id == tenant_a.user_id
-    assert repeated_tenant_a.booking_id == tenant_a.booking_id
+        assert tenant_b.booking_id != tenant_a.booking_id
+        assert tenant_b.user_id == tenant_a.user_id
+        assert repeated_tenant_a.booking_id == tenant_a.booking_id
 
 
 def test_hotel_booking_read_and_list_are_tenant_scoped(db_session_factory):
-    service = HotelBookingService()
-    hotel = _selected_hotel()
-    tenant_a = service.create_booking(_hotel_request("tenant_a"), hotel)
-    tenant_b = service.create_booking(_hotel_request("tenant_b"), hotel)
+    with db_session_factory() as db:
+        service = HotelBookingService(db)
+        hotel = _selected_hotel()
+        tenant_a = service.create_booking(_hotel_request("tenant_a"), hotel)
+        tenant_b = service.create_booking(_hotel_request("tenant_b"), hotel)
 
-    assert tenant_a.booking_id != tenant_b.booking_id
-    assert [
-        booking.booking_id
-        for booking in service.get_user_bookings("same-user-id", "tenant_a")
-    ] == [tenant_a.booking_id]
-    with pytest.raises(ValueError, match="not found"):
-        service.get_booking(tenant_a.booking_id, "same-user-id", "tenant_b")
+        assert tenant_a.booking_id != tenant_b.booking_id
+        assert [
+            booking.booking_id
+            for booking in service.get_user_bookings("same-user-id", "tenant_a")
+        ] == [tenant_a.booking_id]
+        with pytest.raises(ValueError, match="not found"):
+            service.get_booking(tenant_a.booking_id, "same-user-id", "tenant_b")
 
 
 def test_hotel_cancellation_from_other_tenant_does_not_change_status(
     db_session_factory,
 ):
-    service = HotelBookingService()
-    booking = service.create_booking(
-        _hotel_request("tenant_a"),
-        _selected_hotel(),
-    )
+    with db_session_factory() as db:
+        service = HotelBookingService(db)
+        booking = service.create_booking(
+            _hotel_request("tenant_a"),
+            _selected_hotel(),
+        )
 
-    with pytest.raises(ValueError, match="not found"):
-        service.cancel_booking(booking.booking_id, "same-user-id", "tenant_b")
+        with pytest.raises(ValueError, match="not found"):
+            service.cancel_booking(booking.booking_id, "same-user-id", "tenant_b")
 
     with db_session_factory() as db:
         stored = db.scalar(
@@ -179,17 +179,18 @@ def test_hotel_cancellation_from_other_tenant_does_not_change_status(
 
 
 def test_hotel_idempotency_is_tenant_scoped(db_session_factory):
-    service = HotelBookingService()
-    hotel = _selected_hotel()
-    tenant_a = service.create_booking(_hotel_request("tenant_a"), hotel)
-    tenant_b = service.create_booking(_hotel_request("tenant_b"), hotel)
-    repeated_tenant_a = service.create_booking(
-        _hotel_request("tenant_a").model_copy(
-            update={"session_id": "another-session"}
-        ),
-        hotel,
-    )
+    with db_session_factory() as db:
+        service = HotelBookingService(db)
+        hotel = _selected_hotel()
+        tenant_a = service.create_booking(_hotel_request("tenant_a"), hotel)
+        tenant_b = service.create_booking(_hotel_request("tenant_b"), hotel)
+        repeated_tenant_a = service.create_booking(
+            _hotel_request("tenant_a").model_copy(
+                update={"session_id": "another-session"}
+            ),
+            hotel,
+        )
 
-    assert tenant_b.booking_id != tenant_a.booking_id
-    assert tenant_b.user_id == tenant_a.user_id
-    assert repeated_tenant_a.booking_id == tenant_a.booking_id
+        assert tenant_b.booking_id != tenant_a.booking_id
+        assert tenant_b.user_id == tenant_a.user_id
+        assert repeated_tenant_a.booking_id == tenant_a.booking_id

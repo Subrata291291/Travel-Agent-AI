@@ -3,8 +3,8 @@ import hashlib
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.database.connection import SessionLocal
 from app.database.models import HotelBooking
 from app.database.repositories import HotelBookingRepository
 from app.schemas.hotel_booking import (
@@ -26,7 +26,24 @@ class HotelBookingService:
     - Convert database records into API/application responses.
 
     The LLM must never directly create a HotelBooking.
+
+    Database sessions are injected by the application layer.
+    The service does not create or close database sessions itself.
     """
+
+    def __init__(self, db: Session):
+        """
+        Receive the database session from the application layer.
+
+        This keeps database ownership outside the business layer
+        and allows tests to inject an isolated database.
+        """
+
+        self.db = db
+
+    # --------------------------------------------------------
+    # Helper: find existing booking
+    # --------------------------------------------------------
 
     @staticmethod
     def _find_existing_booking(
@@ -34,13 +51,20 @@ class HotelBookingService:
         idempotency_keys: tuple[str, str],
         tenant_id: str,
     ) -> HotelBooking | None:
+        """
+        Find an existing hotel booking using one of the
+        supported idempotency keys.
+        """
+
         for idempotency_key in idempotency_keys:
             booking = repository.get_by_idempotency_key(
                 idempotency_key,
                 tenant_id,
             )
+
             if booking:
                 return booking
+
         return None
 
     # --------------------------------------------------------
@@ -58,8 +82,8 @@ class HotelBookingService:
 
         Example:
 
-        2026-12-20 → 2026-12-22
-        = 2 nights
+            2026-12-20 → 2026-12-22
+            = 2 nights
         """
 
         try:
@@ -203,13 +227,9 @@ class HotelBookingService:
         total_price = price_per_night * nights
 
         # ----------------------------------------------------
-        # 5. Create idempotency key
-        # ----------------------------------------------------
-
-        # ----------------------------------------------------
         # 5. Create stable idempotency key
         # ----------------------------------------------------
-        #
+
         # IMPORTANT:
         # session_id is intentionally NOT included.
         #
@@ -219,7 +239,6 @@ class HotelBookingService:
         # The same user booking the same hotel for the same
         # dates should resolve to the same idempotency key
         # even if the request comes from another session.
-        # ----------------------------------------------------
 
         idempotency_source = "|".join(
             [
@@ -236,6 +255,10 @@ class HotelBookingService:
             idempotency_source.encode("utf-8")
         ).hexdigest()
 
+        # ----------------------------------------------------
+        # Legacy idempotency key
+        # ----------------------------------------------------
+
         legacy_idempotency_source = "|".join(
             [
                 str(request.user_id),
@@ -245,6 +268,7 @@ class HotelBookingService:
                 str(request.travellers),
             ]
         )
+
         legacy_idempotency_key = hashlib.sha256(
             legacy_idempotency_source.encode("utf-8")
         ).hexdigest()
@@ -253,7 +277,7 @@ class HotelBookingService:
         # 6. Database transaction
         # ----------------------------------------------------
 
-        db = SessionLocal()
+        db = self.db
 
         try:
             repository = HotelBookingRepository(db)
@@ -264,7 +288,10 @@ class HotelBookingService:
 
             existing = self._find_existing_booking(
                 repository,
-                (idempotency_key, legacy_idempotency_key),
+                (
+                    idempotency_key,
+                    legacy_idempotency_key,
+                ),
                 request.tenant_id,
             )
 
@@ -301,11 +328,15 @@ class HotelBookingService:
             except IntegrityError:
                 # Another request may have created the same
                 # booking between our check and insert.
+
                 db.rollback()
 
                 existing = self._find_existing_booking(
                     repository,
-                    (idempotency_key, legacy_idempotency_key),
+                    (
+                        idempotency_key,
+                        legacy_idempotency_key,
+                    ),
                     request.tenant_id,
                 )
 
@@ -319,9 +350,6 @@ class HotelBookingService:
         except Exception:
             db.rollback()
             raise
-
-        finally:
-            db.close()
 
     # --------------------------------------------------------
     # Get booking
@@ -339,28 +367,25 @@ class HotelBookingService:
         Business rules:
         - Booking must exist.
         - Booking must belong to current user.
+        - Booking must belong to current tenant.
         """
 
-        db = SessionLocal()
+        db = self.db
 
-        try:
-            repository = HotelBookingRepository(db)
+        repository = HotelBookingRepository(db)
 
-            booking = repository.get_by_id(
-                booking_id,
-                user_id,
-                tenant_id,
+        booking = repository.get_by_id(
+            booking_id,
+            user_id,
+            tenant_id,
+        )
+
+        if not booking:
+            raise ValueError(
+                f"Hotel booking {booking_id} was not found."
             )
 
-            if not booking:
-                raise ValueError(
-                    f"Hotel booking {booking_id} was not found."
-                )
-
-            return self._to_response(booking)
-
-        finally:
-            db.close()
+        return self._to_response(booking)
 
     # --------------------------------------------------------
     # Get user bookings
@@ -372,28 +397,27 @@ class HotelBookingService:
         tenant_id: str,
     ) -> list[HotelBookingResponse]:
         """
-        Retrieve all hotel bookings belonging to a user.
+        Retrieve all hotel bookings belonging to a user
+        inside the current tenant.
         """
 
-        db = SessionLocal()
+        db = self.db
 
-        try:
-            repository = HotelBookingRepository(db)
+        repository = HotelBookingRepository(db)
 
-            bookings = repository.get_user_bookings(
-                user_id,
-                tenant_id,
-            )
+        bookings = repository.get_user_bookings(
+            user_id,
+            tenant_id,
+        )
 
-            return [
-                self._to_response(booking)
-                for booking in bookings
-            ]
+        return [
+            self._to_response(booking)
+            for booking in bookings
+        ]
 
-        finally:
-            db.close()
-
-
+    # --------------------------------------------------------
+    # Cancel booking
+    # --------------------------------------------------------
 
     def cancel_booking(
         self,
@@ -407,13 +431,14 @@ class HotelBookingService:
         Business rules:
         - Booking must exist.
         - Booking must belong to current user.
+        - Booking must belong to current tenant.
         - Booking must currently be confirmed.
         - Already cancelled booking cannot be cancelled again.
-        - Cancellation is performed by application,
-        never by LLM.
+        - Cancellation is performed by the application,
+          never by the LLM.
         """
 
-        db = SessionLocal()
+        db = self.db
 
         try:
             repository = HotelBookingRepository(db)
@@ -434,7 +459,7 @@ class HotelBookingService:
                 )
 
             # ------------------------------------------------
-            # 3. Already cancelled
+            # 2. Already cancelled
             # ------------------------------------------------
 
             if booking.status == "cancelled":
@@ -444,7 +469,7 @@ class HotelBookingService:
                 )
 
             # ------------------------------------------------
-            # 4. Only confirmed bookings can be cancelled
+            # 3. Only confirmed bookings can be cancelled
             # ------------------------------------------------
 
             if booking.status != "confirmed":
@@ -455,20 +480,20 @@ class HotelBookingService:
                 )
 
             # ------------------------------------------------
-            # 5. Update status
+            # 4. Update status
             # ------------------------------------------------
 
             booking.status = "cancelled"
 
             # ------------------------------------------------
-            # 6. Persist
+            # 5. Persist
             # ------------------------------------------------
 
             db.commit()
             db.refresh(booking)
 
             # ------------------------------------------------
-            # 7. Return stable response
+            # 6. Return stable response
             # ------------------------------------------------
 
             return self._to_response(booking)
@@ -476,6 +501,3 @@ class HotelBookingService:
         except Exception:
             db.rollback()
             raise
-
-        finally:
-            db.close()
