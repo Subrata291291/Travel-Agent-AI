@@ -16,6 +16,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        settings.frontend_url.rstrip("/"),
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -23,6 +24,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/")
+def root_status():
+    """Return a simple status page for the deployed API root."""
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "health": "/health",
+        "api": "/api/v1",
+    }
 
 
 app.include_router(

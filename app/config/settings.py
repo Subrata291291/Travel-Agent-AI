@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "Travel Agent"
     app_env: str = "development"
     debug: bool = True
+    frontend_url: str = "https://travel-agentai.netlify.app"
 
     # =========================
     # API Keys

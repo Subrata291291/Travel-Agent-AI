@@ -14,6 +14,11 @@ function App() {
     <BrowserRouter>
       <Routes>
 
+        <Route
+          path="/"
+          element={<Login />}
+        />
+
         {/* Public */}
         <Route
           path="/login"
