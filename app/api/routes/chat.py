@@ -3,9 +3,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.agents.graph import TravelAgentGraph
-from app.api.dependencies import get_tenant_context
-from app.database.connection import get_db
+from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
+from app.database.connection import get_db
 
 
 router = APIRouter(
@@ -63,11 +63,7 @@ class ChatResponse(BaseModel):
     booking_domain: str | None = None
 
 
-# Create one graph instance for the API process.
-#
-# Later, depending on deployment architecture,
-# this can be moved into application lifespan/startup
-# or a dependency/container.
+# One graph instance for the API process.
 travel_agent_graph = TravelAgentGraph()
 
 
@@ -77,14 +73,25 @@ travel_agent_graph = TravelAgentGraph()
 )
 def chat(
     request: ChatRequest,
-    context: TenantContext = Depends(get_tenant_context),
+    context: TenantContext = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Send a message to the Travel Agent.
 
-    The route itself does not contain travel/business logic.
-    It delegates the conversation to TravelAgentGraph.
+    Authentication:
+        JWT
+            ↓
+        get_current_user()
+            ↓
+        TenantContext
+            ↓
+        TravelAgentGraph
+
+    The route does not trust user_id or tenant_id
+    supplied by the client.
+
+    Both identities come from the validated JWT.
     """
 
     result = travel_agent_graph.run(
@@ -96,11 +103,13 @@ def chat(
     )
 
     booking = result.get("booking")
+
     booking_domain = (
         result.get("pending_booking_domain")
         or (
             "hotel"
-            if isinstance(booking, dict) and booking.get("hotel_id")
+            if isinstance(booking, dict)
+            and booking.get("hotel_id")
             else None
         )
     )
@@ -151,5 +160,6 @@ def chat(
         ),
 
         booking=booking,
+
         booking_domain=booking_domain,
     )

@@ -193,6 +193,8 @@ class HotelBookingRepository:
         self,
         idempotency_key: str,
         tenant_id: str,
+        user_id: str,
+        session_id: str,
     ):
         """
         Retrieve a booking using its idempotency key.
@@ -206,6 +208,9 @@ class HotelBookingRepository:
                 HotelBooking.idempotency_key
                 == idempotency_key,
                 HotelBooking.tenant_id == tenant_id,
+                HotelBooking.user_id == user_id,
+                HotelBooking.session_id == session_id,
+                HotelBooking.status == "confirmed",
             )
             .first()
         )

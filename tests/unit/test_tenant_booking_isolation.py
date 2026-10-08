@@ -1,4 +1,6 @@
 import pytest
+import hashlib
+from langchain_core.messages import HumanMessage
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +11,8 @@ from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
 from app.schemas.booking import BookingRequest
 from app.schemas.hotel_booking import HotelBookingRequest
+from app.agents.graph import GraphContext, TravelAgentGraph
+from app.schemas.perception import TripPerception
 
 
 @pytest.fixture
@@ -193,4 +197,275 @@ def test_hotel_idempotency_is_tenant_scoped(db_session_factory):
 
         assert tenant_b.booking_id != tenant_a.booking_id
         assert tenant_b.user_id == tenant_a.user_id
-        assert repeated_tenant_a.booking_id == tenant_a.booking_id
+        assert repeated_tenant_a.booking_id != tenant_a.booking_id
+
+
+def test_hotel_retry_in_same_session_is_idempotent(db_session_factory):
+    with db_session_factory() as db:
+        service = HotelBookingService(db)
+        request = _hotel_request("tenant_a")
+        hotel = _selected_hotel()
+
+        first = service.create_booking(request, hotel)
+        retry = service.create_booking(request, hotel)
+
+        assert retry.booking_id == first.booking_id
+        assert retry.status == first.status == "confirmed"
+        assert retry.total_price == 200.0
+
+
+def test_new_session_does_not_reuse_cancelled_legacy_hotel_booking(
+    db_session_factory,
+):
+    import hashlib
+
+    from app.database.models import HotelBooking
+
+    with db_session_factory() as db:
+        old_request = _hotel_request("tenant_a").model_copy(
+            update={"session_id": "smoke-test-hotel-001"}
+        )
+        hotel = _selected_hotel()
+        legacy_source = "|".join(
+            [
+                old_request.user_id,
+                old_request.hotel_id,
+                hotel["check_in_date"],
+                hotel["check_out_date"],
+                str(old_request.travellers),
+            ]
+        )
+        legacy_key = hashlib.sha256(
+            legacy_source.encode("utf-8")
+        ).hexdigest()
+        old_booking = HotelBooking(
+            booking_id="BOOK-EE3409258769",
+            user_id=old_request.user_id,
+            tenant_id=old_request.tenant_id,
+            session_id=old_request.session_id,
+            hotel_id=hotel["hotel_id"],
+            hotel_name=hotel["name"],
+            provider=hotel["provider"],
+            destination=hotel["destination"],
+            check_in_date=hotel["check_in_date"],
+            check_out_date=hotel["check_out_date"],
+            idempotency_key=legacy_key,
+            price_per_night=100.0,
+            currency="INR",
+            travellers=1,
+            nights=2,
+            total_price=200.0,
+            status="cancelled",
+        )
+        db.add(old_booking)
+        db.commit()
+
+        new_request = old_request.model_copy(
+            update={"session_id": "hotel-booking-live-001"}
+        )
+        new_booking = HotelBookingService(db).create_booking(
+            new_request,
+            hotel,
+        )
+        old_after = db.get(HotelBooking, old_booking.booking_id)
+
+        assert new_booking.booking_id != old_booking.booking_id
+        assert new_booking.session_id == "hotel-booking-live-001"
+        assert new_booking.status == "confirmed"
+        assert old_after.status == "cancelled"
+
+
+def test_same_hotel_intent_in_another_tenant_gets_separate_key(db_session_factory):
+    with db_session_factory() as db:
+        service = HotelBookingService(db)
+        hotel = _selected_hotel()
+        request_a = _hotel_request("tenant_a").model_copy(
+            update={"session_id": "same-session"}
+        )
+        request_b = _hotel_request("tenant_b").model_copy(
+            update={"session_id": "same-session"}
+        )
+
+        booking_a = service.create_booking(request_a, hotel)
+        booking_b = service.create_booking(request_b, hotel)
+        stored_a = db.get(HotelBooking, booking_a.booking_id)
+        stored_b = db.get(HotelBooking, booking_b.booking_id)
+
+        assert booking_a.booking_id != booking_b.booking_id
+        assert stored_a.tenant_id == "tenant_a"
+        assert stored_b.tenant_id == "tenant_b"
+
+
+def test_compiled_hotel_confirmation_creates_new_booking_and_reports_db_status(
+    test_db,
+):
+    from app.database.models import Tenant
+
+    test_db.add(Tenant(tenant_id="tenant_demo", name="Demo", slug="demo"))
+    hotel = {
+        "hotel_id": "HOTEL-2",
+        "name": "Mock Valley Resort",
+        "provider": "Mock Hotel Provider",
+        "destination": "Goa",
+        "check_in_date": "2026-12-20",
+        "check_out_date": "2026-12-23",
+        "price_per_night": 5000.0,
+        "currency": "INR",
+        "travellers": 2,
+    }
+    legacy_source = "|".join(
+        [
+            "user_demo",
+            "HOTEL-2",
+            "2026-12-20",
+            "2026-12-23",
+            "2",
+        ]
+    )
+    old_booking = HotelBooking(
+        booking_id="BOOK-EE3409258769",
+        user_id="user_demo",
+        tenant_id="tenant_demo",
+        session_id="smoke-test-hotel-001",
+        hotel_id="HOTEL-2",
+        hotel_name="Mock Valley Resort",
+        provider="Mock Hotel Provider",
+        destination="Goa",
+        check_in_date="2026-12-20",
+        check_out_date="2026-12-23",
+        idempotency_key=hashlib.sha256(
+            legacy_source.encode("utf-8")
+        ).hexdigest(),
+        price_per_night=5000.0,
+        currency="INR",
+        travellers=2,
+        nights=3,
+        total_price=15000.0,
+        status="cancelled",
+    )
+    test_db.add(old_booking)
+    test_db.commit()
+
+    class Memory:
+        def get_messages(self, session_id, tenant_id):
+            return []
+
+    class Perception:
+        def understand(self, message, history):
+            return TripPerception(
+                intent="book_trip",
+                destination="Goa",
+                start_date="2026-12-20",
+                end_date="2026-12-23",
+                duration_days=3,
+                travellers=2,
+                budget=20000.0,
+                currency="INR",
+                selected_option_id="HOTEL-2",
+                confirmation="yes",
+            )
+
+    graph = TravelAgentGraph()
+    graph.memory = Memory()
+    graph.perception_agent = Perception()
+    result = graph.graph.invoke(
+        {
+            "user_message": "Yes, book this hotel.",
+            "user_id": "user_demo",
+            "tenant_id": "tenant_demo",
+            "session_id": "hotel-booking-live-001",
+            "messages": [HumanMessage(content="Yes, book this hotel.")],
+            "perception": None,
+            "plan": None,
+            "destination_resolution": None,
+            "clarification_needed": False,
+            "pending_clarification": None,
+            "pending_destination": None,
+            "pending_destination_candidates": [],
+            "tool_context": None,
+            "trip_context": {
+                "intent": "find_hotel",
+                "destination": "Goa",
+                "start_date": "2026-12-20",
+                "end_date": "2026-12-23",
+                "duration_days": 3,
+                "travellers": 2,
+                "budget": 20000.0,
+                "currency": "INR",
+            },
+            "transport_options": [],
+            "hotel_options": [hotel],
+            "hotel_search_performed": False,
+            "transport_search_performed": False,
+            "selected_option_id": "HOTEL-2",
+            "pending_booking_confirmation": True,
+            "pending_booking_domain": "hotel",
+            "pending_cancellation_booking_id": None,
+            "booking": None,
+            "answer": None,
+        },
+        context=GraphContext(db=test_db),
+    )
+
+    created = result["booking"]
+    old_after = test_db.get(HotelBooking, old_booking.booking_id)
+    stored = test_db.get(HotelBooking, created["booking_id"])
+    answer = result["messages"][-1].content
+
+    assert created["booking_id"] != old_booking.booking_id
+    assert created["session_id"] == "hotel-booking-live-001"
+    assert created["hotel_id"] == "HOTEL-2"
+    assert created["nights"] == 3
+    assert created["price_per_night"] == 5000.0
+    assert created["total_price"] == 15000.0
+    assert created["status"] == stored.status == "confirmed"
+    assert old_after.status == "cancelled"
+    assert "Hotel booking confirmed successfully!" in answer
+    assert f"Status: {stored.status}" in answer
+    assert result["pending_booking_confirmation"] is False
+
+    retry = graph.graph.invoke(
+        {
+            **result,
+            "user_message": "Yes, book this hotel.",
+            "messages": [HumanMessage(content="Yes, book this hotel.")],
+        },
+        context=GraphContext(db=test_db),
+    )
+    retry_answer = retry["messages"][-1].content
+    assert retry["booking"]["booking_id"] == created["booking_id"]
+    assert retry["booking"]["status"] == "confirmed"
+    assert retry["pending_booking_confirmation"] is False
+    assert retry["selected_option_id"] is None
+    assert "already confirmed" in retry_answer.lower()
+    assert "Do you want me to book this hotel?" not in retry_answer
+    assert test_db.query(HotelBooking).filter_by(
+        session_id="hotel-booking-live-001"
+    ).count() == 1
+
+    cancelled_retry = graph.graph.invoke(
+        {
+            **result,
+            "user_id": "user_demo",
+            "tenant_id": "tenant_demo",
+            "session_id": "smoke-test-hotel-001",
+            "user_message": "Yes, book this hotel.",
+            "messages": [HumanMessage(content="Yes, book this hotel.")],
+            "booking": {
+                "booking_id": old_after.booking_id,
+                "user_id": old_after.user_id,
+                "tenant_id": old_after.tenant_id,
+                "session_id": old_after.session_id,
+                "hotel_id": old_after.hotel_id,
+                "status": old_after.status,
+            },
+            "hotel_options": [hotel],
+        },
+        context=GraphContext(db=test_db),
+    )
+    cancelled_answer = cancelled_retry["messages"][-1].content.lower()
+    assert cancelled_retry["booking"]["status"] == "cancelled"
+    assert cancelled_retry["pending_booking_confirmation"] is False
+    assert "already confirmed" not in cancelled_answer
+    assert "hotel booking is cancelled" in cancelled_answer
+    assert "status: cancelled" in cancelled_answer

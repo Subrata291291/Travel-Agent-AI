@@ -166,7 +166,7 @@ RULES:
     - "other"
 
 23. For hotel search or hotel availability
-    requests, use:
+   requests, use:
 
     task_type = "hotel"
 
@@ -174,6 +174,10 @@ RULES:
     - "hotel_search"
     - "search_hotel"
     - "hotel_booking"
+
+    Hotel recommendation requests also use:
+
+    task_type = "hotel"
 
 24. For flight, train, bus, or general
     transportation search requests, use:

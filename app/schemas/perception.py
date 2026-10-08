@@ -22,6 +22,7 @@ class TripPerception(BaseModel):
         "check_weather",
         "find_transport",
         "find_hotel",
+        "recommend_hotel",
         "find_restaurant",
         "book_trip",
         "get_bookings",

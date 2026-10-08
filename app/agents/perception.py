@@ -1,5 +1,6 @@
 from app.llm.router import LLMRouter
 from app.schemas.perception import TripPerception
+import re
 
 
 class PerceptionAgent:
@@ -143,6 +144,55 @@ class PerceptionAgent:
             phrase in text
             for phrase in detail_phrases
         )
+
+    @staticmethod
+    def _is_hotel_recommendation_request(
+        user_message: str,
+        conversation_history: list[dict],
+    ) -> bool:
+        """Recognize hotel recommendation requests deterministically."""
+
+        if re.search(r"\bHOTEL-\d+\b", user_message.upper()):
+            return False
+
+        text = re.sub(
+            r"[^a-z0-9\s-]",
+            " ",
+            user_message.lower(),
+        )
+        mentions_hotel = re.search(
+            r"\b(hotels?|resorts?|accommodation|stays?)\b",
+            text,
+        )
+        asks_recommendation = re.search(
+            r"\b(recommend\w*|suggest\w*|best|choose)\b",
+            text,
+        )
+        if mentions_hotel and asks_recommendation:
+            return True
+
+        # Contextual references such as "Which one should I choose?"
+        # apply only when a prior assistant response actually listed hotels.
+        if re.search(r"\b(which one|what one)\b.*\b(choose|pick|select)\b", text):
+            for message in conversation_history:
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+                content = str(message.get("content", "")).lower()
+                if "available hotel options:" in content and "hotel id:" in content:
+                    return True
+
+        return False
+
+    @staticmethod
+    def _hotel_option_selection(user_message: str) -> str | None:
+        """Extract a hotel ID only when the user explicitly selects it."""
+
+        match = re.search(r"\bHOTEL-\d+\b", user_message.upper())
+        if not match:
+            return None
+        if re.search(r"\b(book|choose|select|pick|go with|take)\b", user_message.lower()):
+            return match.group(0)
+        return None
     
     # ==============================================================
     # DETERMINISTIC: BOOKING DOMAIN
@@ -318,6 +368,20 @@ class PerceptionAgent:
 
         if conversation_history is None:
             conversation_history = []
+
+        selected_hotel_id = self._hotel_option_selection(user_message)
+        if selected_hotel_id:
+            return TripPerception(
+                intent="book_trip",
+                selected_option_id=selected_hotel_id,
+                booking_domain="hotel",
+            )
+
+        if self._is_hotel_recommendation_request(
+            user_message,
+            conversation_history,
+        ):
+            return TripPerception(intent="recommend_hotel")
         
                 # ==========================================================
         # APPLICATION-LEVEL: GET BOOKING DETAILS
@@ -458,12 +522,18 @@ Use ONLY one of these intents:
 - "check_weather"
 - "find_transport"
 - "find_hotel"
+- "recommend_hotel"
 - "find_restaurant"
 - "book_trip"
 - "get_bookings"
 - "cancel_booking"
 - "question"
 - "other"
+
+Use "recommend_hotel" when the user asks which hotel is best,
+which hotel you recommend, or asks you to suggest a hotel. If the
+user says "which one should I choose?", use this intent when the
+conversation history shows a hotel options list.
 
 
 BOOKING HISTORY / MY BOOKINGS RULES:
@@ -1001,12 +1071,17 @@ intent must be one of:
 - "check_weather"
 - "find_transport"
 - "find_hotel"
+- "recommend_hotel"
 - "find_restaurant"
 - "book_trip"
 - "get_bookings"
 - "cancel_booking"
 - "question"
 - "other"
+
+"recommend_hotel" is a hotel recommendation request, not a hotel
+booking request. Do not set selected_option_id unless the user
+explicitly selects a hotel.
 
 
 transport_mode must be one of:

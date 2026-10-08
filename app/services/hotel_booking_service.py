@@ -50,6 +50,8 @@ class HotelBookingService:
         repository: HotelBookingRepository,
         idempotency_keys: tuple[str, str],
         tenant_id: str,
+        user_id: str,
+        session_id: str,
     ) -> HotelBooking | None:
         """
         Find an existing hotel booking using one of the
@@ -60,6 +62,8 @@ class HotelBookingService:
             booking = repository.get_by_idempotency_key(
                 idempotency_key,
                 tenant_id,
+                user_id,
+                session_id,
             )
 
             if booking:
@@ -227,23 +231,17 @@ class HotelBookingService:
         total_price = price_per_night * nights
 
         # ----------------------------------------------------
-        # 5. Create stable idempotency key
+        # 5. Create session-scoped idempotency key
         # ----------------------------------------------------
 
-        # IMPORTANT:
-        # session_id is intentionally NOT included.
-        #
-        # A session represents a conversation/request context,
-        # not a unique booking.
-        #
-        # The same user booking the same hotel for the same
-        # dates should resolve to the same idempotency key
-        # even if the request comes from another session.
+        # Retries of the same operation in one session reuse its key.
+        # A new session represents a new booking operation.
 
         idempotency_source = "|".join(
             [
                 str(request.tenant_id),
                 str(request.user_id),
+                str(request.session_id),
                 str(request.hotel_id),
                 str(check_in_date),
                 str(check_out_date),
@@ -293,6 +291,8 @@ class HotelBookingService:
                     legacy_idempotency_key,
                 ),
                 request.tenant_id,
+                request.user_id,
+                request.session_id,
             )
 
             if existing:
@@ -338,6 +338,8 @@ class HotelBookingService:
                         legacy_idempotency_key,
                     ),
                     request.tenant_id,
+                    request.user_id,
+                    request.session_id,
                 )
 
                 if existing:
