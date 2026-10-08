@@ -20,7 +20,7 @@ def create_access_token(
     now = datetime.now(timezone.utc)
 
     expires_at = now + timedelta(
-        minutes=settings.jwt_access_token_expire_minutes
+        minutes=settings.jwt_expire_minutes
     )
 
     payload = {

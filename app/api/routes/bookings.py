@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth.dependencies import get_current_context
+from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
 from app.schemas.hotel_booking import (
     HotelBookingListResponse,
@@ -23,7 +23,7 @@ hotel_booking_service = HotelBookingService()
     response_model=HotelBookingListResponse,
 )
 def get_my_bookings(
-    context: TenantContext = Depends(get_current_context)
+    context: TenantContext = Depends(get_current_user)
 ):
     """
     Return all hotel bookings belonging to the
@@ -56,7 +56,7 @@ def get_my_bookings(
 )
 def get_booking(
     booking_id: str,
-    context: TenantContext = Depends(get_current_context),
+    context: TenantContext = Depends(get_current_user),
 ):
     """
     Return one hotel booking belonging to the
@@ -82,7 +82,7 @@ def get_booking(
 )
 def cancel_booking(
     booking_id: str,
-    context: TenantContext = Depends(get_current_context),
+    context: TenantContext = Depends(get_current_user),
 ):
     try:
         return hotel_booking_service.cancel_booking(

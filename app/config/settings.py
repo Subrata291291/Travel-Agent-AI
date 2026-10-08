@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     # =========================
 
     primary_llm: str = "groq"
-
     fallback_llm_1: str = "openrouter"
     fallback_llm_2: str = "gemini"
     fallback_llm_3: str = "openai"
@@ -48,9 +47,19 @@ class Settings(BaseSettings):
     # Authentication / JWT
     # =========================
 
+    # Keep the secret outside the source code.
+    # It should come from .env.
     jwt_secret_key: str
+
+    # JWT signing algorithm.
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 60
+
+    # Access token lifetime in minutes.
+    jwt_expire_minutes: int = 60
+
+    # =========================
+    # Environment configuration
+    # =========================
 
     model_config = SettingsConfigDict(
         env_file=".env",

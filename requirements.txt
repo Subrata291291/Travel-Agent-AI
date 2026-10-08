@@ -27,3 +27,4 @@ pytest-asyncio
 alembic
 PyJWT
 bcrypt
+email-validator

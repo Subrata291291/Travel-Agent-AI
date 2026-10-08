@@ -9,6 +9,7 @@ class TenantContext:
     This object represents:
     - which tenant is making the request
     - which user is making the request
+    - which role the user has
 
     API routes and services should use this context
     instead of reading identity information directly.
@@ -16,10 +17,11 @@ class TenantContext:
 
     tenant_id: str
     user_id: str
+    role: str = "user"
 
     def __post_init__(self):
         """
-        Validate the identity values at the application boundary.
+        Validate and normalize identity values at the application boundary.
         """
 
         if not self.tenant_id or not self.tenant_id.strip():
@@ -27,6 +29,9 @@ class TenantContext:
 
         if not self.user_id or not self.user_id.strip():
             raise ValueError("user_id cannot be empty.")
+
+        if not self.role or not self.role.strip():
+            raise ValueError("role cannot be empty.")
 
         # Normalize surrounding whitespace.
         object.__setattr__(
@@ -39,4 +44,11 @@ class TenantContext:
             self,
             "user_id",
             self.user_id.strip(),
+        )
+
+        # Normalize role for consistent authorization checks.
+        object.__setattr__(
+            self,
+            "role",
+            self.role.strip().lower(),
         )
