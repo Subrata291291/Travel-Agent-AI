@@ -127,6 +127,7 @@ def get_current_user(
             role=user.role,
             name=user.name,
             email=user.email,
+            profile_picture_data=user.profile_picture_data,
         )
 
     finally:

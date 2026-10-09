@@ -6,10 +6,47 @@ import {
 
 import { sendChatMessage } from "../services/chatService";
 import InrPrice from "../components/InrPrice";
+import { useAuth } from "../context/AuthContext";
+import TravelAgentLogo from "../components/TravelAgentLogo";
+
+
+function getOrCreateSessionId() {
+  try {
+    const key = "travel_agent_session_id";
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const newSession = `web-${crypto.randomUUID()}`;
+    sessionStorage.setItem(key, newSession);
+    return newSession;
+  } catch {
+    return `web-${crypto.randomUUID()}`;
+  }
+}
+
+function readChatHistory(key) {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (Array.isArray(saved) && saved.every((message) =>
+      message && typeof message.id === "string" &&
+      ["user", "assistant"].includes(message.role) &&
+      typeof message.content === "string"
+    )) {
+      return saved;
+    }
+  } catch {
+    // Ignore unavailable storage or a malformed saved conversation.
+  }
+  return null;
+}
 
 
 function Chat() {
-  const [messages, setMessages] = useState([
+  const { user } = useAuth();
+
+  const [sessionId] = useState(getOrCreateSessionId);
+  const historyKey = `travel_agent_chat_history:${user?.tenant_id || ""}:${user?.user_id || ""}:${sessionId}`;
+
+  const [messages, setMessages] = useState(() => readChatHistory(historyKey) || [
     {
       id: "welcome",
       role: "assistant",
@@ -30,32 +67,6 @@ function Chat() {
 
 
   // =========================================================
-  // SESSION ID
-  // =========================================================
-
-  const [sessionId] = useState(() => {
-    const existing =
-      sessionStorage.getItem(
-        "travel_agent_session_id"
-      );
-
-    if (existing) {
-      return existing;
-    }
-
-    const newSession =
-      `web-${crypto.randomUUID()}`;
-
-    sessionStorage.setItem(
-      "travel_agent_session_id",
-      newSession
-    );
-
-    return newSession;
-  });
-
-
-  // =========================================================
   // AUTO SCROLL
   // =========================================================
 
@@ -64,6 +75,15 @@ function Chat() {
       behavior: "smooth",
     });
   }, [messages, loading]);
+
+  // Keep the rendered transcript when this page unmounts during navigation.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(historyKey, JSON.stringify(messages));
+    } catch (storageError) {
+      console.warn("Unable to save this chat in session storage.", storageError);
+    }
+  }, [historyKey, messages]);
 
 
   // =========================================================
@@ -350,9 +370,7 @@ function ChatHeader({
 
         <div className="relative">
 
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 text-lg text-white">
-            ✦
-          </div>
+          <TravelAgentLogo />
 
           <span className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
 
@@ -412,9 +430,7 @@ function Message({
     >
 
       {!isUser && (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-sm text-white">
-          ✦
-        </div>
+        <TravelAgentLogo className="h-9 w-9 rounded-lg" />
       )}
 
 
@@ -928,9 +944,7 @@ function TypingIndicator() {
   return (
     <div className="flex gap-3">
 
-      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-sm text-white">
-        ✦
-      </div>
+      <TravelAgentLogo className="h-9 w-9 rounded-lg" />
 
       <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-5 py-4 shadow-sm">
 

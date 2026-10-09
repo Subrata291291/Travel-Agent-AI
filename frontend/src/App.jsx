@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import Chat from "./pages/Chat";
 import MyTrips from "./pages/MyTrips";
 import BookingDetails from "./pages/BookingDetails";
+import Settings from "./pages/Settings";
 
 import ProtectedRoute from "./components/ProtectedRoute";
 import AppLayout from "./layouts/AppLayout";
@@ -52,6 +53,11 @@ function App() {
             <Route
               path="/my-trips/:bookingId"
               element={<BookingDetails />}
+            />
+
+            <Route
+              path="/settings"
+              element={<Settings />}
             />
 
           </Route>

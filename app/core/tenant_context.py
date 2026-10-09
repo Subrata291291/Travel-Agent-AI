@@ -20,6 +20,7 @@ class TenantContext:
     role: str = "user"
     name: str | None = None
     email: str | None = None
+    profile_picture_data: str | None = None
 
     def __post_init__(self):
         """

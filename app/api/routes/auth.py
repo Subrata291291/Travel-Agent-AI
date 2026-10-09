@@ -1,4 +1,6 @@
 from uuid import uuid4
+import base64
+import binascii
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
@@ -19,6 +21,9 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     RegistrationRequest,
+    ProfileUpdateRequest,
+    EmailChangeRequest,
+    PasswordChangeRequest,
 )
 
 
@@ -205,4 +210,113 @@ def get_me(
         role=context.role,
         name=context.name,
         email=context.email,
+        profile_picture_data=context.profile_picture_data,
     )
+
+
+@router.patch("/profile", response_model=CurrentUserResponse)
+def update_profile(
+    request: ProfileUpdateRequest,
+    context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(
+        User.user_id == context.user_id,
+        User.tenant_id == context.tenant_id,
+    ).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User was not found.")
+
+    if "name" in request.model_fields_set:
+        name = (request.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Name cannot be empty.")
+        user.name = name
+
+    if "profile_picture_data" in request.model_fields_set:
+        image_data = request.profile_picture_data
+        if image_data is not None:
+            try:
+                header, encoded = image_data.split(",", 1)
+                if header not in {
+                    "data:image/jpeg;base64", "data:image/png;base64",
+                    "data:image/webp;base64",
+                }:
+                    raise ValueError
+                decoded = base64.b64decode(encoded, validate=True)
+                signature_valid = (
+                    (header == "data:image/jpeg;base64" and decoded.startswith(b"\xff\xd8\xff"))
+                    or (header == "data:image/png;base64" and decoded.startswith(b"\x89PNG\r\n\x1a\n"))
+                    or (header == "data:image/webp;base64" and decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP")
+                )
+                if not decoded or len(decoded) > 2 * 1024 * 1024 or not signature_valid:
+                    raise ValueError
+            except (ValueError, binascii.Error):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Profile photo must be a valid JPEG, PNG, or WebP image up to 2 MB.",
+                ) from None
+        user.profile_picture_data = image_data
+
+    db.commit()
+    db.refresh(user)
+    return CurrentUserResponse(
+        user_id=user.user_id, tenant_id=user.tenant_id, role=user.role,
+        name=user.name, email=user.email,
+        profile_picture_data=user.profile_picture_data,
+    )
+
+
+@router.patch("/email", response_model=CurrentUserResponse)
+def change_email(
+    request: EmailChangeRequest,
+    context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(
+        User.user_id == context.user_id,
+        User.tenant_id == context.tenant_id,
+    ).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User was not found.")
+    if not verify_password(request.current_password, user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    email = str(request.new_email).strip().lower()
+    duplicate = db.query(User).filter(
+        func.lower(User.email) == email,
+        User.user_id != user.user_id,
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="That email address is already in use.")
+    user.email = email
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That email address is already in use.") from None
+    db.refresh(user)
+    return CurrentUserResponse(
+        user_id=user.user_id, tenant_id=user.tenant_id, role=user.role,
+        name=user.name, email=user.email,
+        profile_picture_data=user.profile_picture_data,
+    )
+
+
+@router.patch("/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    request: PasswordChangeRequest,
+    context: TenantContext = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(
+        User.user_id == context.user_id,
+        User.tenant_id == context.tenant_id,
+    ).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User was not found.")
+    if not verify_password(request.current_password, user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    if request.current_password == request.new_password:
+        raise HTTPException(status_code=422, detail="New password must be different from the current password.")
+    user.password_hash = hash_password(request.new_password)
+    db.commit()

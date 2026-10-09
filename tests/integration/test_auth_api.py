@@ -150,6 +150,7 @@ def test_login_and_current_user(test_db):
             "role": "user",
             "name": "Integration Test User",
             "email": TEST_EMAIL,
+            "profile_picture_data": None,
         }
 
     finally:
@@ -213,6 +214,50 @@ def test_registration_validates_email_and_password(test_db):
         client = TestClient(app)
         assert client.post("/api/v1/auth/register", json={"name": "Test", "email": "bad", "password": "SafePassword123"}).status_code == 422
         assert client.post("/api/v1/auth/register", json={"name": "Test", "email": "ok@example.com", "password": "short"}).status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_account_settings_update_profile_email_and_password(test_db):
+    create_test_tenant(test_db)
+    create_test_user(test_db)
+
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+        login = client.post("/api/v1/auth/login", json={
+            "email": TEST_EMAIL, "password": TEST_PASSWORD,
+        })
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+        image = "data:image/png;base64,iVBORw0KGgo="
+        profile = client.patch("/api/v1/auth/profile", headers=headers, json={
+            "name": "Updated Traveler", "profile_picture_data": image,
+        })
+        assert profile.status_code == 200
+        assert profile.json()["name"] == "Updated Traveler"
+        assert profile.json()["profile_picture_data"] == image
+
+        invalid_photo = client.patch("/api/v1/auth/profile", headers=headers, json={
+            "profile_picture_data": "data:image/png;base64,ZmFrZQ==",
+        })
+        assert invalid_photo.status_code == 422
+
+        email = client.patch("/api/v1/auth/email", headers=headers, json={
+            "new_email": "updated@example.com", "current_password": TEST_PASSWORD,
+        })
+        assert email.status_code == 200
+        assert email.json()["email"] == "updated@example.com"
+
+        password = client.patch("/api/v1/auth/password", headers=headers, json={
+            "current_password": TEST_PASSWORD, "new_password": "NewSafePassword456!",
+        })
+        assert password.status_code == 204
+        user = test_db.query(User).filter_by(user_id=TEST_USER_ID).one()
+        assert verify_password("NewSafePassword456!", user.password_hash)
     finally:
         app.dependency_overrides.pop(get_db, None)
 

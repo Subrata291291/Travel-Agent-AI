@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import TravelAgentLogo from "../components/TravelAgentLogo";
 import { getBookings } from "../services/bookingService";
 import { getUserDisplayName } from "../utils/userDisplay";
 
@@ -241,7 +242,7 @@ function Dashboard() {
 
           <ActionCard
             to="/chat"
-            icon="✦"
+            icon={<TravelAgentLogo className="h-9 w-9 rounded-lg" />}
             title="Plan a trip"
             description="Tell the AI where you want to go and let it plan your journey."
           />

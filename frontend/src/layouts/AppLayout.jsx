@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getUserDisplayName, getUserInitial } from "../utils/userDisplay";
+import TravelAgentLogo from "../components/TravelAgentLogo";
 
 function AppLayout() {
   const { user, logout } = useAuth();
@@ -52,17 +53,6 @@ function AppLayout() {
           {/* Right side */}
           <div className="flex items-center gap-3">
 
-            {/* Notification */}
-            <button
-              type="button"
-              className="relative hidden h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 sm:flex"
-              aria-label="Notifications"
-            >
-              <span className="text-lg">♢</span>
-
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-blue-500 ring-2 ring-white" />
-            </button>
-
             {/* User */}
             <div className="flex items-center gap-3 border-l border-slate-200 pl-3">
               <div className="hidden text-right sm:block">
@@ -75,9 +65,17 @@ function AppLayout() {
                 </p>
               </div>
 
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-slate-800 to-slate-950 text-sm font-bold text-white shadow-sm">
-                {getUserInitial(user)}
-              </div>
+              {user?.profile_picture_data ? (
+                <img
+                  src={user.profile_picture_data}
+                  alt="Profile"
+                  className="h-10 w-10 rounded-full border border-slate-200 object-cover"
+                />
+              ) : (
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-slate-800 to-slate-950 text-sm font-bold text-white shadow-sm">
+                  {getUserInitial(user)}
+                </div>
+              )}
             </div>
 
           </div>
@@ -141,7 +139,9 @@ function AppLayout() {
                             : "bg-slate-100 text-slate-500 group-hover:bg-white",
                         ].join(" ")}
                       >
-                        {item.icon}
+                        {item.label === "AI Travel Agent" ? (
+                          <TravelAgentLogo className="h-8 w-8 rounded-lg" />
+                        ) : item.icon}
                       </span>
 
                       <span>{item.label}</span>
@@ -155,16 +155,19 @@ function AppLayout() {
             {/* Bottom section */}
             <div className="mt-auto space-y-1 border-t border-slate-100 pt-4">
 
-              <button
-                type="button"
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+              <NavLink
+                to="/settings"
+                className={({ isActive }) => [
+                  "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
+                  isActive ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+                ].join(" ")}
               >
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
                   ⚙
                 </span>
 
                 Settings
-              </button>
+              </NavLink>
 
               <button
                 type="button"

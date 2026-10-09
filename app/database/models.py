@@ -502,6 +502,11 @@ class User(Base):
         nullable=True,
     )
 
+    profile_picture_data: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     # --------------------------------------------------------
     # Authorization foundation
     # --------------------------------------------------------

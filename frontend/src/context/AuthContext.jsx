@@ -79,6 +79,10 @@ export function AuthProvider({ children }) {
     setLoading(false);
   };
 
+  const updateUser = (updates) => {
+    setUser((current) => current ? { ...current, ...updates } : current);
+  };
+
   const value = {
     token,
     user,
@@ -86,6 +90,7 @@ export function AuthProvider({ children }) {
     isAuthenticated,
     login,
     logout,
+    updateUser,
   };
 
   return (
