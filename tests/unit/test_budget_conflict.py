@@ -114,7 +114,7 @@ def test_compiled_graph_stops_after_hotel_search_before_recommendation_llm():
     }
 
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return []
 
         def get_context(self, session_id, tenant_id, user_id):

@@ -23,6 +23,7 @@ def test_amadeus_search_preserves_supplier_offer_and_price(monkeypatch):
         if request.url.path.endswith("/hotel-offers"):
             assert request.headers["Authorization"] == "Bearer test-token"
             assert request.url.params["checkInDate"] == (today + timedelta(days=30)).isoformat()
+            assert request.url.params["roomQuantity"] == "2"
             return httpx.Response(200, json={"data": [{"hotel": {"hotelId": "HLPAR1", "name": "Test Hotel"},
                 "offers": [{"id": "OFFER-77", "price": {"total": "300", "currency": "EUR"},
                             "room": {"typeEstimated": {"category": "STANDARD"}}, "boardType": "BREAKFAST"}]}]})
@@ -34,7 +35,8 @@ def test_amadeus_search_preserves_supplier_offer_and_price(monkeypatch):
     ))
     options = provider.search_hotels("PAR", (today + timedelta(days=30)).isoformat(),
                                      (today + timedelta(days=32)).isoformat(), currency="EUR",
-                                     resolved_destination={"latitude": 48.8, "longitude": 2.3})
+                                     resolved_destination={"latitude": 48.8, "longitude": 2.3},
+                                     room_quantity=2)
     assert len(options) == 1
     assert options[0].supplier_offer_id == "OFFER-77"
     assert options[0].supplier_hotel_id == "HLPAR1"

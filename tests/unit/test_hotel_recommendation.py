@@ -79,7 +79,7 @@ def test_contextual_which_one_request_is_hotel_recommendation():
 
 def test_live_graph_recommendation_uses_canonical_hotel_and_does_not_select_or_book():
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return [
                 {
                     "role": "assistant",

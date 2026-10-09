@@ -28,7 +28,7 @@ def test_compiled_transport_search_renders_authoritative_option_not_llm_text():
     option = _flight_option()
 
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return []
 
         def get_context(self, session_id, tenant_id, user_id):

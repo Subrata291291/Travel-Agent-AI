@@ -28,6 +28,7 @@ class AmadeusHotelProvider:
         currency: str = "INR",
         *,
         resolved_destination: dict[str, Any] | None = None,
+        room_quantity: int = 1,
     ) -> list[HotelOption]:
         try:
             check_in = date.fromisoformat(check_in_date)
@@ -35,7 +36,7 @@ class AmadeusHotelProvider:
         except ValueError:
             raise ValueError("Hotel dates must use YYYY-MM-DD format.") from None
         nights = (check_out - check_in).days
-        if nights <= 0 or travellers < 1:
+        if nights <= 0 or travellers < 1 or room_quantity < 1:
             raise ValueError("Hotel search requires valid dates and at least one traveller.")
         if not resolved_destination:
             raise ValueError("A resolved destination with latitude and longitude is required.")
@@ -63,7 +64,7 @@ class AmadeusHotelProvider:
             "adults": travellers,
             "checkInDate": check_in_date,
             "checkOutDate": check_out_date,
-            "roomQuantity": 1,
+            "roomQuantity": room_quantity,
             "currency": currency,
         })
         entries = result.get("data", [])
@@ -105,7 +106,7 @@ class AmadeusHotelProvider:
                         "board_type": offer.get("boardType"),
                         "cancellation_policy": cancellation,
                         "is_test_data": "test.api.amadeus.com" in self.client.base_url,
-                        "room_quantity": 1,
+                        "room_quantity": room_quantity,
                     },
                     name=hotel.get("name") or "Hotel",
                     destination=destination,

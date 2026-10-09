@@ -19,6 +19,8 @@ class ToolContext(BaseModel):
     end_date: Optional[str] = None
 
     travellers: Optional[int] = None
+    origin: Optional[str] = None
+    room_quantity: Optional[int] = None
 
     budget: Optional[float] = None
     currency: Optional[str] = None

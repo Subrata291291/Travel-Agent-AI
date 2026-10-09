@@ -386,7 +386,7 @@ def test_compiled_hotel_confirmation_creates_new_booking_and_reports_db_status(
     test_db.commit()
 
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return []
 
     class Perception:
@@ -516,7 +516,7 @@ def test_compiled_transport_confirmation_retry_returns_existing_booking(test_db)
     option = _transport_option()
 
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return []
 
     class Perception:
@@ -611,7 +611,7 @@ def test_repeated_transport_confirmation_reuses_existing_cross_session_booking(t
     )
 
     class Memory:
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return []
 
     class Perception:

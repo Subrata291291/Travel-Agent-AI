@@ -694,6 +694,10 @@ class TravelAgentGraph:
         return {
             "intent": perception.intent,
             "destination": perception.destination,
+            "origin": perception.origin,
+            "transport_destination": perception.transport_destination,
+            "hotel_destination": perception.hotel_destination,
+            "room_quantity": perception.room_quantity,
             "start_date": perception.start_date,
             "end_date": perception.end_date,
             "duration_days": perception.duration_days,
@@ -739,6 +743,7 @@ class TravelAgentGraph:
         conversation_history = self.memory.get_messages(
             state["session_id"],
             state["tenant_id"],
+            state["user_id"],
         )
 
         # --------------------------------------------------------
@@ -749,6 +754,38 @@ class TravelAgentGraph:
             state["user_message"],
             conversation_history,
         )
+
+        message = state["user_message"]
+        route = re.search(
+            r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+            message, re.IGNORECASE,
+        )
+        if route:
+            current.origin = route.group(1).strip(" .,!?")
+            current.destination = route.group(2).strip(" .,!?")
+            current.transport_destination = current.destination
+        hotel_place = re.search(
+            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where)\b|[,.;!?]|$)",
+            message, re.IGNORECASE,
+        )
+        if hotel_place:
+            current.hotel_destination = hotel_place.group(1).strip(" .,!?")
+            current.destination = current.hotel_destination
+        traveller_match = re.search(
+            r"\b(\d+)\s+(?:people|persons?|passengers?|travellers?|travelers?)\b",
+            message, re.IGNORECASE,
+        )
+        if traveller_match:
+            current.travellers = int(traveller_match.group(1))
+        room_match = re.search(r"\b(\d+)\s+rooms?\b", message, re.IGNORECASE)
+        if room_match:
+            current.room_quantity = int(room_match.group(1))
+        if re.search(r"\b(train|trains|rail)\b", message, re.IGNORECASE):
+            current.transport_mode = "train"
+        if re.search(r"\bBengali\s+food\b", message, re.IGNORECASE):
+            current.preferences = list(dict.fromkeys([*(current.preferences or []), "Bengali food available"]))
+        if state.get("pending_clarification") == "origin" and not route:
+            current.origin = message.strip()
 
         # --------------------------------------------------------
         # 3. Load previously saved trip context
@@ -770,6 +807,8 @@ class TravelAgentGraph:
             or bool(previous)
         )
 
+        has_explicit_destination = bool(route or hotel_place)
+
         if not is_continuation:
             return {
                 "perception": current
@@ -779,10 +818,23 @@ class TravelAgentGraph:
         # 5. Preserve destination
         # --------------------------------------------------------
 
-        if not current.destination:
+        if not current.destination and not has_explicit_destination:
             current.destination = previous.get(
                 "destination"
             )
+
+        if not current.origin:
+            current.origin = previous.get("origin")
+        if not current.transport_destination:
+            current.transport_destination = previous.get("transport_destination") or current.destination
+        if state.get("pending_clarification") == "origin":
+            # A one-word reply answers the outstanding origin question; it
+            # must not replace the already established destination.
+            current.destination = previous.get("destination") or current.destination
+        if not current.hotel_destination:
+            current.hotel_destination = previous.get("hotel_destination") or current.destination
+        if current.room_quantity is None:
+            current.room_quantity = previous.get("room_quantity")
 
         # --------------------------------------------------------
         # 6. Preserve dates
@@ -994,6 +1046,8 @@ class TravelAgentGraph:
             pending_clarification == "destination"
             and pending_destination
             and destination
+            and not re.search(r"\bfrom\s+.+?\s+to\s+", state.get("user_message", ""), re.IGNORECASE)
+            and not re.search(r"\bhotels?\s+(?:in|at)\s+", state.get("user_message", ""), re.IGNORECASE)
         ):
 
             normalized_destination = (
@@ -1259,6 +1313,15 @@ class TravelAgentGraph:
                 "clarification_needed": True,
                 "pending_clarification": "destination",
             }
+
+        perception = state.get("perception")
+        if perception is not None:
+            perception.destination = ", ".join(
+                part for part in (
+                    candidate.get("name"), candidate.get("admin1"), candidate.get("country")
+                ) if part
+            )
+            perception.hotel_destination = perception.destination
 
         print(
             "[DestinationSelection] Selected candidate: "
@@ -1687,6 +1750,21 @@ class TravelAgentGraph:
         question = "\n".join(questions) or (
             "Please provide the missing details for your trip."
         )
+        perception = state.get("perception")
+        message = state.get("user_message", "")
+        if (
+            perception
+            and perception.transport_mode == "train"
+            and perception.origin
+            and re.search(r"\bhotels?\b", message, re.IGNORECASE)
+        ):
+            question = (
+                "Train search from "
+                f"{perception.origin} to {perception.destination or 'your destination'} "
+                "is currently unavailable because an authorized IRCTC Principal Service Provider integration is not configured. "
+                "I can continue with the live Amadeus hotel search. "
+                + question
+            )
 
         return {
             "messages": [AIMessage(content=question)],
@@ -4238,6 +4316,44 @@ unsupported information.
                 tool_call["args"]
             )
 
+            perception = state.get("perception")
+            if tool_call["name"] == "search_hotels":
+                if tool_context.resolved_destination:
+                    location = tool_context.resolved_destination
+                    canonical_parts = [
+                        getattr(location, field, None)
+                        for field in ("name", "admin1", "country")
+                    ]
+                    tool_args["destination"] = ", ".join(
+                        part for part in canonical_parts if part
+                    )
+                if tool_context.room_quantity:
+                    tool_args["room_quantity"] = tool_context.room_quantity
+                if tool_context.travellers:
+                    tool_args["travellers"] = tool_context.travellers
+                if perception and perception.start_date:
+                    tool_args["check_in_date"] = perception.start_date
+                if perception and perception.end_date:
+                    tool_args["check_out_date"] = perception.end_date
+            elif tool_call["name"] in {"search_trains", "search_flights", "search_buses"}:
+                if tool_context.resolved_destination:
+                    location = tool_context.resolved_destination
+                    canonical_parts = [
+                        getattr(location, field, None)
+                        for field in ("name", "admin1", "country")
+                    ]
+                    tool_args["destination"] = ", ".join(
+                        part for part in canonical_parts if part
+                    )
+                if perception and perception.transport_destination:
+                    tool_args["destination"] = perception.transport_destination
+                if tool_context.origin:
+                    tool_args["origin"] = tool_context.origin
+                if tool_context.travellers:
+                    tool_args["travellers"] = tool_context.travellers
+                if perception and perception.start_date:
+                    tool_args["departure_date"] = perception.start_date
+
             # ----------------------------------------------------
             # Add canonical/resolved destination
             #
@@ -4395,9 +4511,16 @@ unsupported information.
 
                 result = tool_message.content
                 if result.startswith("TOOL_ERROR:"):
-                    transport_search_error = (
-                        result.split("Error:", maxsplit=1)[-1].strip()
-                    )
+                    if tool_name == "search_trains":
+                        transport_search_error = (
+                            "Train search is disabled until an authorized IRCTC Principal Service Provider integration is documented and configured."
+                        )
+                    else:
+                        transport_search_error = (
+                            result.split("Error:", maxsplit=1)[-1]
+                            .removeprefix("TOOL_ERROR:")
+                            .strip()
+                        )
 
                 try:
 
@@ -4528,6 +4651,7 @@ unsupported information.
             tenant_id,
             "human",
             user_message,
+            user_id,
         )
 
         # ----------------------------------------------------
@@ -4538,6 +4662,7 @@ unsupported information.
             self.memory.get_workflow_state(
                 session_id,
                 tenant_id,
+                user_id,
             )
         )
 
@@ -4804,6 +4929,7 @@ unsupported information.
                 tenant_id,
                 "assistant",
                 final_message.content,
+                user_id,
             )
 
         # ----------------------------------------------------
@@ -4957,5 +5083,7 @@ unsupported information.
                 if perception
                 else []
             ),
+            origin=perception.origin if perception else None,
+            room_quantity=perception.room_quantity if perception else None,
         )
 

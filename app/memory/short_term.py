@@ -13,6 +13,7 @@ class ShortTermMemory:
         self,
         tenant_id: str,
         session_id: str,
+        user_id: str | None = None,
     ) -> str:
         """
         Build a tenant-isolated key for in-memory conversation storage.
@@ -26,7 +27,7 @@ class ShortTermMemory:
         if not session_id:
             raise ValueError("session_id is required")
 
-        return f"{tenant_id}:{session_id}"
+        return f"{tenant_id}:{user_id or 'legacy'}:{session_id}"
     
 
     def add_message(
@@ -35,11 +36,13 @@ class ShortTermMemory:
         tenant_id: str,
         role: str,
         content: str,
+        user_id: str | None = None,
     ) -> None:
 
         session_key = self._build_session_key(
             tenant_id,
             session_id,
+            user_id,
         )
 
         if session_key not in self.sessions:
@@ -56,11 +59,13 @@ class ShortTermMemory:
         self,
         session_id: str,
         tenant_id: str,
+        user_id: str | None = None,
     ) -> List[dict]:
 
         session_key = self._build_session_key(
             tenant_id,
             session_id,
+            user_id,
         )
 
         return self.sessions.get(
@@ -72,11 +77,13 @@ class ShortTermMemory:
         self,
         session_id: str,
         tenant_id: str,
+        user_id: str | None = None,
     ) -> None:
 
         session_key = self._build_session_key(
             tenant_id,
             session_id,
+            user_id,
         )
 
         self.sessions.pop(

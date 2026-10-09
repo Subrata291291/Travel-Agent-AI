@@ -194,3 +194,8 @@ class TripPerception(BaseModel):
             "when there is no clear confirmation."
         ),
     )
+
+    origin: Optional[str] = Field(default=None, description="Explicit transport origin.")
+    transport_destination: Optional[str] = Field(default=None, description="Explicit transport destination, separate from lodging location.")
+    hotel_destination: Optional[str] = Field(default=None, description="Explicit lodging destination when distinct from transport destination.")
+    room_quantity: Optional[int] = Field(default=None, ge=1, description="Number of hotel rooms requested.")

@@ -101,16 +101,16 @@ def test_two_turn_run_selects_persisted_destination_candidate():
             self.states = {}
             self.messages = {}
 
-        def add_message(self, session_id, tenant_id, role, content):
+        def add_message(self, session_id, tenant_id, role, content, user_id=None):
             key = (session_id, tenant_id)
             self.messages.setdefault(key, []).append(
                 {"role": role, "content": content}
             )
 
-        def get_messages(self, session_id, tenant_id):
+        def get_messages(self, session_id, tenant_id, user_id=None):
             return self.messages.get((session_id, tenant_id), [])
 
-        def get_workflow_state(self, session_id, tenant_id):
+        def get_workflow_state(self, session_id, tenant_id, user_id=None):
             state = self.states.get((session_id, tenant_id), {})
             return json.loads(json.dumps(state))
 
