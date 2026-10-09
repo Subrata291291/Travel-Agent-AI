@@ -1,19 +1,24 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import (
     get_current_user,
 )
 from app.auth.jwt import create_access_token
-from app.auth.password import verify_password
+from app.auth.password import hash_password, verify_password
 from app.config.settings import settings
 from app.core.tenant_context import TenantContext
 from app.database.connection import get_db
-from app.database.models import User
+from app.database.models import Tenant, User
 from app.schemas.auth import (
     CurrentUserResponse,
     LoginRequest,
     LoginResponse,
+    RegistrationRequest,
 )
 
 
@@ -21,6 +26,46 @@ router = APIRouter(
     prefix="/auth",
     tags=["Authentication"],
 )
+
+
+@router.post("/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+def register(request: RegistrationRequest, db: Session = Depends(get_db)):
+    """Create an individual tenant and its first user, then return a JWT."""
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Name is required.")
+
+    email = str(request.email).strip().lower()
+    if db.query(User).filter(func.lower(User.email) == email).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists.")
+
+    account_id = uuid4().hex
+    tenant = Tenant(tenant_id=account_id, name=name, slug=f"account-{account_id}", status="active")
+    user = User(
+        user_id=account_id,
+        tenant_id=account_id,
+        email=email,
+        password_hash=hash_password(request.password),
+        name=name,
+        role="user",
+        status="active",
+    )
+    try:
+        db.add_all([tenant, user])
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists.") from None
+
+    return LoginResponse(
+        access_token=create_access_token(user_id=user.user_id, tenant_id=user.tenant_id, role=user.role),
+        token_type="bearer",
+        expires_in=settings.jwt_expire_minutes * 60,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+        role=user.role,
+    )
 
 
 @router.post(
@@ -59,7 +104,7 @@ def login(
 
     user = (
         db.query(User)
-        .filter(User.email == request.email)
+        .filter(func.lower(User.email) == str(request.email).strip().lower())
         .first()
     )
 

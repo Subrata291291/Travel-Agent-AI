@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database.connection import Base
 
@@ -18,6 +19,7 @@ def test_db():
         connect_args={
             "check_same_thread": False,
         },
+        poolclass=StaticPool,
         future=True,
     )
 

@@ -16,18 +16,24 @@ Base = declarative_base()
 # DATABASE ENGINE
 # ============================================================
 
+database_url = settings.database_url.strip()
+if database_url.startswith("postgres://"):
+    database_url = "postgresql+psycopg://" + database_url.removeprefix("postgres://")
+elif database_url.startswith("postgresql://"):
+    database_url = "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
+
 connect_args = {}
 
 # SQLite requires this setting when the application may access
 # the database from different execution contexts.
-if settings.database_url.startswith("sqlite"):
+if database_url.startswith("sqlite"):
     connect_args = {
         "check_same_thread": False
     }
 
 
 engine = create_engine(
-    settings.database_url,
+    database_url,
     connect_args=connect_args,
     future=True,
 )

@@ -51,3 +51,9 @@ class CurrentUserResponse(BaseModel):
     role: str = Field(
         description="Current role of the authenticated user."
     )
+
+
+class RegistrationRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)

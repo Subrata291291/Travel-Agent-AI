@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.auth.password import hash_password
+from app.auth.password import hash_password, verify_password
 from app.database.connection import get_db
 from app.database.models import Tenant, User
 from app.main import app
@@ -159,3 +159,71 @@ def test_login_and_current_user(test_db):
             get_db,
             None,
         )
+
+
+def test_registration_creates_tenant_and_hashed_password(test_db):
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/api/v1/auth/register",
+            json={"name": "New Traveler", "email": "NEW@example.com", "password": "SafePassword123"},
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        user = test_db.query(User).filter_by(user_id=payload["user_id"]).one()
+        tenant = test_db.query(Tenant).filter_by(tenant_id=payload["tenant_id"]).one()
+        assert user.email == "new@example.com"
+        assert user.password_hash != "SafePassword123"
+        assert verify_password("SafePassword123", user.password_hash)
+        assert tenant.tenant_id == user.tenant_id
+        assert payload["access_token"]
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_registration_rejects_duplicate_email(test_db):
+    create_test_tenant(test_db)
+    create_test_user(test_db)
+
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/api/v1/auth/register",
+            json={"name": "Duplicate", "email": TEST_EMAIL.upper(), "password": "SafePassword123"},
+        )
+        assert response.status_code == 409
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_registration_validates_email_and_password(test_db):
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+        assert client.post("/api/v1/auth/register", json={"name": "Test", "email": "bad", "password": "SafePassword123"}).status_code == 422
+        assert client.post("/api/v1/auth/register", json={"name": "Test", "email": "ok@example.com", "password": "short"}).status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_production_origin_cors_preflight():
+    response = TestClient(app).options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://travel-agentai.netlify.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://travel-agentai.netlify.app"
+    assert "POST" in response.headers["access-control-allow-methods"]

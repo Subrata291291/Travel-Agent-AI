@@ -15,7 +15,7 @@ from alembic import context
 # needs to know about every table before Alembic can
 # compare the Python models with the database schema.
 #
-from app.database.connection import Base
+from app.database.connection import Base, database_url
 from app.database.models import (
     Tenant,
     User,
@@ -30,6 +30,7 @@ from app.database.models import (
 # ---------------------------------------------------------
 
 config = context.config
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 
 # ---------------------------------------------------------

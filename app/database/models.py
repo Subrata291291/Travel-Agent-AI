@@ -4,9 +4,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    text,
 )
 
 from sqlalchemy.orm import (
@@ -458,6 +460,7 @@ class User(Base):
     """
 
     __tablename__ = "users"
+    __table_args__ = (Index("uq_users_email_lower", text("lower(email)"), unique=True),)
 
     # --------------------------------------------------------
     # Primary identifier
@@ -474,6 +477,7 @@ class User(Base):
 
     tenant_id: Mapped[str] = mapped_column(
         String(64),
+        ForeignKey("tenants.tenant_id"),
         nullable=False,
         index=True,
     )

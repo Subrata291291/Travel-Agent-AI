@@ -2,13 +2,17 @@ import axios from "axios";
 
 const TOKEN_KEY = "travel_agent_token";
 const defaultApiBaseUrl = import.meta.env.PROD
-  ? "https://travel-agent-ai-c97e.onrender.com/api/v1"
-  : "http://127.0.0.1:8000/api/v1";
+  ? ""
+  : "http://127.0.0.1:8000";
+const configuredBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).replace(/\/$/, "");
+const apiBaseUrl = configuredBaseUrl.endsWith("/api/v1")
+  ? configuredBaseUrl
+  : configuredBaseUrl
+    ? `${configuredBaseUrl}/api/v1`
+    : "/api/v1";
 
 const api = axios.create({
-  baseURL:
-    import.meta.env.VITE_API_BASE_URL ||
-    defaultApiBaseUrl,
+  baseURL: apiBaseUrl,
 
   headers: {
     "Content-Type": "application/json",
