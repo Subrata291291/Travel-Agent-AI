@@ -1,5 +1,11 @@
 # Provider integrations
 
+## Render deployment
+
+Set the Render web service start command to `bash start.sh`. The script runs `alembic upgrade head` before starting Uvicorn, so database migrations are applied before login or other routes access the updated models.
+
+For the currently deployed service, run `alembic upgrade head` once from the Render Shell (or trigger a deploy after changing its start command to `bash start.sh`). The current login error indicates that the deployment database has not applied revision `d3e9a6f8b21c`, which adds `users.profile_picture_data`. After that migration finishes, restart/redeploy the web service.
+
 ## Hotels: Amadeus test search
 
 Set `AMADEUS_CLIENT_ID` and `AMADEUS_CLIENT_SECRET` from an Amadeus account. The default `AMADEUS_BASE_URL` is `https://test.api.amadeus.com`; keep it on the test host for initial evaluation. Search uses OAuth client credentials, Hotel List by-geocode, and Hotel Offers v3. It does not call Amadeus booking endpoints. Hotel options keep the supplier hotel and offer IDs and relevant room, board, and cancellation fields.
