@@ -1,3 +1,6 @@
+import os
+from collections.abc import Mapping
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -16,11 +19,27 @@ Base = declarative_base()
 # DATABASE ENGINE
 # ============================================================
 
-database_url = settings.database_url.strip()
-if database_url.startswith("postgres://"):
-    database_url = "postgresql+psycopg://" + database_url.removeprefix("postgres://")
-elif database_url.startswith("postgresql://"):
-    database_url = "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
+def normalize_database_url(url: str) -> str:
+    """Normalize PostgreSQL URLs to SQLAlchemy's Psycopg 3 dialect."""
+    url = url.strip()
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
+
+
+def resolve_database_url(
+    configured_url: str,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Prefer a non-empty DATABASE_URL, falling back to app settings."""
+    environ = os.environ if environ is None else environ
+    environment_url = environ.get("DATABASE_URL", "").strip()
+    return normalize_database_url(environment_url or configured_url)
+
+
+database_url = resolve_database_url(settings.database_url)
 
 connect_args = {}
 
