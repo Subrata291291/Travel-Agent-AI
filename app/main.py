@@ -17,6 +17,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.frontend_url.rstrip("/"),
+        # Netlify production site (keep explicit even if the Render
+        # FRONTEND_URL environment variable was set to an older site name).
+        "https://travel-agentai.netlify.app",
+        "https://travel-agent-ai.netlify.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
