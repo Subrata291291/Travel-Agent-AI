@@ -173,7 +173,8 @@ def test_explicit_hotel_choice_still_enters_confirmation_for_known_id():
     assert result["selected_option_id"] == "HOTEL-2"
     assert result["pending_booking_confirmation"] is True
     assert "Price per night: 5000.0 INR" in result["messages"][0].content
-    assert "Do you want me to book this hotel?" in result["messages"][0].content
+    assert "create an internal booking record" in result["messages"][0].content
+    assert "does not reserve a room with the supplier" in result["messages"][0].content
 
 
 def test_hotel_retry_routes_saved_booking_without_response_tenant_field():

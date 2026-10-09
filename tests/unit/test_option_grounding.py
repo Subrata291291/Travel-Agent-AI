@@ -222,6 +222,33 @@ def test_confirmed_transport_booking_total_uses_authoritative_price(test_db):
     assert "Total: 26000.0 INR" in result["messages"][0].content
 
 
+def test_hotel_supplier_offer_id_selects_canonical_option():
+    graph = TravelAgentGraph.__new__(TravelAgentGraph)
+    result = graph.hotel_booking_confirmation_node({
+        "perception": TripPerception(
+            intent="book_trip", selected_option_id="Amadeus-Offer-1", travellers=2
+        ),
+        "hotel_options": [{
+            "hotel_id": "Amadeus-Offer-1",
+            "supplier_offer_id": "Amadeus-Offer-1",
+            "supplier_hotel_id": "HOTEL-X",
+            "name": "Supplier Hotel",
+            "provider": "Amadeus",
+            "destination": "Paris",
+            "check_in_date": "2026-12-20",
+            "check_out_date": "2026-12-22",
+            "price_per_night": 150,
+            "total_price": 300,
+            "currency": "EUR",
+            "provider_details": {"room_type": "STANDARD"},
+        }],
+    })
+
+    assert result["selected_option_id"] == "Amadeus-Offer-1"
+    assert result["pending_booking_confirmation"] is True
+    assert "does not reserve a room with the supplier" in result["messages"][0].content
+
+
 def test_hotel_recommendation_uses_authoritative_prices_and_details():
     graph = TravelAgentGraph.__new__(TravelAgentGraph)
     result = graph.structured_options_node(

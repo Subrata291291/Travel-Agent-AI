@@ -209,6 +209,18 @@ def test_hotel_cancellation_from_other_tenant_does_not_change_status(
         assert stored.status == "confirmed"
 
 
+def test_confirmed_hotel_lookup_is_tenant_scoped(db_session_factory):
+    from app.database.repositories import HotelBookingRepository
+    with db_session_factory() as db:
+        HotelBookingService(db).create_booking(
+            _hotel_request("tenant_a"), _selected_hotel()
+        )
+        repository = HotelBookingRepository(db)
+        assert repository.get_confirmed_booking(
+            "same-user-id", "tenant_b", "HOTEL-1"
+        ) is None
+
+
 def test_hotel_idempotency_is_tenant_scoped(db_session_factory):
     with db_session_factory() as db:
         service = HotelBookingService(db)

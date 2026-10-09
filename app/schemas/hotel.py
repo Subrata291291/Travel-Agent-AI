@@ -17,6 +17,11 @@ class HotelOption(BaseModel):
         description="Unique identifier for the hotel option."
     )
 
+    supplier_offer_id: str | None = Field(default=None, description="Supplier offer identifier, when the provider returns one.")
+    supplier_hotel_id: str | None = Field(default=None, description="Supplier hotel identifier, when distinct from the option ID.")
+    total_price: float | None = Field(default=None, ge=0, description="Total price for the stay returned by the provider.")
+    provider_details: dict = Field(default_factory=dict, description="Provider-specific offer details needed to identify this search result.")
+
     name: str = Field(
         description="Hotel name."
     )

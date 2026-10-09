@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     duffel_base_url: str = "https://api.duffel.com"
     duffel_version: str = "v2"
 
+    # Optional Amadeus Self-Service hotel search credentials. Keep the test
+    # environment as the default until production access is explicitly set.
+    amadeus_client_id: str = ""
+    amadeus_client_secret: str = ""
+    amadeus_base_url: str = "https://test.api.amadeus.com"
+    # Busbud integration remains disabled until partner credentials and
+    # endpoint documentation are supplied by Busbud.
+    busbud_api_key: str = ""
+    busbud_base_url: str = ""
+
 
     # =========================
     # Database

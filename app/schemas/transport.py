@@ -16,3 +16,4 @@ class TransportOption(BaseModel):
     travellers: int | None = Field(default=None, ge=1)
     total_price: float | None = Field(default=None, ge=0)
     currency: str = Field(default="INR")
+    provider_details: dict = Field(default_factory=dict)

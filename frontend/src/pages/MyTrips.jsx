@@ -322,6 +322,8 @@ function BookingCard({
 
   const status =
     booking.status?.toLowerCase() || "unknown";
+  const isTrain =
+    booking.mode?.toLowerCase() === "train";
 
   return (
     <Link
@@ -349,7 +351,24 @@ function BookingCard({
         <div className="flex items-center gap-3">
 
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-lg">
-            {isHotel ? "⌂" : "✈"}
+            {isHotel ? "⌂" : isTrain ? (
+              <svg
+                aria-label="Train"
+                role="img"
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="5" y="3" width="14" height="15" rx="3" />
+                <path d="M8 7h3v4H8zM13 7h3v4h-3zM8 15h8M8 21l2-3m6 3-2-3M5 13h14" />
+                <circle cx="8" cy="15" r=".5" fill="currentColor" />
+                <circle cx="16" cy="15" r=".5" fill="currentColor" />
+              </svg>
+            ) : "✈"}
           </div>
 
           <div>

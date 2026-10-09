@@ -179,6 +179,7 @@ class HotelBookingRepository:
             self.db.query(HotelBooking)
             .filter(
                 HotelBooking.user_id == user_id,
+                HotelBooking.tenant_id == tenant_id,
                 HotelBooking.hotel_id == hotel_id,
                 HotelBooking.status == "confirmed",
             )
@@ -232,7 +233,6 @@ class HotelBookingRepository:
             self.db.query(HotelBooking)
             .filter(
                 HotelBooking.user_id == user_id,
-                HotelBooking.tenant_id == tenant_id,
                 HotelBooking.tenant_id == tenant_id,
             )
             .order_by(

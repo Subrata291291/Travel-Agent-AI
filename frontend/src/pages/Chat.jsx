@@ -719,6 +719,7 @@ function HotelCard({
       : null
   );
   const isDemo = /mock|demo/i.test(option.provider || "");
+  const isAmadeusTest = option.provider_details?.is_test_data === true;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -750,12 +751,29 @@ function HotelCard({
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
         {option.hotel_id && <span>{option.hotel_id}</span>}
         {option.provider && <span>· {option.provider}</span>}
+        {option.supplier_offer_id && (
+          <span>· Supplier offer {option.supplier_offer_id}</span>
+        )}
         {isDemo && (
           <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">
             Demo data
           </span>
         )}
+        {isAmadeusTest && (
+          <span className="rounded bg-sky-50 px-1.5 py-0.5 font-medium text-sky-700">
+            Amadeus test environment
+          </span>
+        )}
       </div>
+
+      {option.provider_details?.room_type && (
+        <p className="mt-2 text-xs text-slate-600">
+          Room: {option.provider_details.room_type}
+          {option.provider_details.board_type
+            ? ` · ${option.provider_details.board_type}`
+            : ""}
+        </p>
+      )}
 
 
       <div className="mt-4 grid grid-cols-2 gap-4">
