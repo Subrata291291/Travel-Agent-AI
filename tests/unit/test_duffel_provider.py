@@ -15,19 +15,76 @@ class FakeDuffelClient:
 
     def get_sync(self, path, params=None):
         self.get_calls.append((path, params))
-        return {"data": self.places.get(params["query"], [])}
+        query = (params or {}).get("query")
+        return {"data": self.places.get(query, self.places.get("nearby", []))}
 
     def post_sync(self, path, json=None):
         self.post_calls.append((path, json))
         return {"data": {"offers": self.offers}}
 
 
-def test_airport_resolver_passes_iata_codes_without_network_call():
-    client = FakeDuffelClient()
+def test_airport_resolver_validates_iata_codes_using_duffel_data():
+    client = FakeDuffelClient(places={
+        "ccu": [{"type": "airport", "name": "Netaji Subhas Chandra Bose International Airport", "iata_code": "CCU", "city_name": "Kolkata", "iata_country_code": "IN"}]
+    })
     resolver = AirportResolver(client)
 
     assert resolver.resolve(" ccu ") == "CCU"
-    assert client.get_calls == []
+    assert client.get_calls == [("/places/suggestions", {"query": "ccu"})]
+
+
+def test_howrah_resolves_through_duffel_kolkata_airport_data():
+    client = FakeDuffelClient(places={
+        "Howrah": [],
+        "nearby": [{
+            "type": "airport", "id": "arp_ccu_in",
+            "name": "Netaji Subhas Chandra Bose International Airport",
+            "iata_code": "CCU", "city_name": "Kolkata", "iata_country_code": "IN",
+        }],
+    })
+    class HowrahGeocoder:
+        def search(self, _query):
+            return {"latitude": 22.5958, "longitude": 88.2636}
+
+    result = AirportResolver(client, geocoding=HowrahGeocoder()).lookup("Howrah", field="origin")
+    assert result == {
+        "status": "resolved",
+        "airport_name": "Netaji Subhas Chandra Bose International Airport",
+        "city": "Kolkata",
+        "country_code": "IN",
+        "iata_code": "CCU",
+        "duffel_place_id": "arp_ccu_in",
+    }
+    assert client.get_calls[1][1] == {
+        "lat": "22.5958", "lng": "88.2636", "rad": "60000"
+    }
+
+
+def test_kolkata_resolves_to_ccu_from_authoritative_duffel_response():
+    client = FakeDuffelClient(places={
+        "Kolkata": [{
+            "type": "airport", "name": "Netaji Subhas Chandra Bose International Airport",
+            "iata_code": "CCU", "city_name": "Kolkata", "iata_country_code": "IN",
+        }]
+    })
+    assert AirportResolver(client).resolve("Kolkata") == "CCU"
+
+
+def test_airport_resolver_never_invents_code_when_lookup_has_no_results():
+    client = FakeDuffelClient()
+    with pytest.raises(ValueError, match="No airport or city code found"):
+        AirportResolver(client).resolve("Not a real airport")
+
+
+def test_airport_resolver_reports_lookup_service_unavailable():
+    from app.providers.duffel.client import DuffelAPIError
+
+    class OfflineClient:
+        def get_sync(self, *_args, **_kwargs):
+            raise DuffelAPIError("offline")
+
+    with pytest.raises(ValueError, match="temporarily unavailable"):
+        AirportResolver(OfflineClient()).lookup("Kolkata")
 
 
 def test_airport_resolver_uses_exact_city_code_for_multi_airport_city():
@@ -57,8 +114,9 @@ def test_airport_resolver_requires_clarification_for_ambiguous_airports():
         }
     )
 
-    with pytest.raises(ValueError, match="matches multiple places"):
+    with pytest.raises(ValueError, match="matches multiple airports") as error:
         AirportResolver(client).resolve("Springfield")
+    assert "Which airport would you like?" in str(error.value)
 
 
 def test_duffel_provider_resolves_city_names_and_preserves_offer_id():

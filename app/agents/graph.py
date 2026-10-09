@@ -349,6 +349,16 @@ class TravelAgentGraph:
         )
 
         graph.add_node(
+            "flight_destination_clarification",
+            self.flight_destination_clarification_node,
+        )
+
+        graph.add_node(
+            "acknowledgement",
+            self.acknowledgement_node,
+        )
+
+        graph.add_node(
             "budget_conflict",
             self.budget_conflict_node,
         )
@@ -485,6 +495,8 @@ class TravelAgentGraph:
                 "cancel_cancellation_request": "cancel_cancellation_request",
                 "wait_cancellation_confirmation": "wait_cancellation_confirmation",
                 "destination_selection": "destination_selection",
+                "flight_destination_clarification": "flight_destination_clarification",
+                "acknowledgement": "acknowledgement",
                 "hotel_recommendation": "hotel_recommendation",
                 "budget_conflict": "budget_conflict",
             },
@@ -499,6 +511,9 @@ class TravelAgentGraph:
             "planner_clarification",
             END,
         )
+
+        graph.add_edge("flight_destination_clarification", END)
+        graph.add_edge("acknowledgement", END)
 
         # ----------------------------------------------------
         # DESTINATION ROUTING
@@ -764,6 +779,40 @@ class TravelAgentGraph:
             current.origin = route.group(1).strip(" .,!?")
             current.destination = route.group(2).strip(" .,!?")
             current.transport_destination = current.destination
+        flight_request = bool(re.search(
+            r"\b(?:flight|air\s*ticket|airline|fly|flying)\b",
+            message,
+            re.IGNORECASE,
+        ))
+        explicit_flight_origin = None
+        flight_origin_without_destination = False
+        if flight_request and not route:
+            origin_match = re.search(
+                r"\bfrom\s+(.+?)(?=\s+(?:to|for|on|and|with)\b|[,.;!?]|$)",
+                message,
+                re.IGNORECASE,
+            )
+            if origin_match:
+                explicit_flight_origin = origin_match.group(1).strip(" .,!?")
+                flight_origin_without_destination = True
+                current.origin = explicit_flight_origin
+                # A new flight request with an explicit origin and no
+                # destination is a new route, not a continuation of old legs.
+                current.destination = None
+                current.transport_destination = None
+        flight_clarification_reply = (
+            not flight_request
+            and state.get("pending_clarification")
+            in {"flight_origin", "flight_destination"}
+        )
+        if flight_request or flight_clarification_reply:
+            current.intent = "find_transport"
+            current.transport_mode = "flight"
+        if flight_clarification_reply and state.get("pending_clarification") == "flight_origin":
+            current.origin = message.strip()
+        elif flight_clarification_reply and state.get("pending_clarification") == "flight_destination":
+            current.destination = message.strip()
+            current.transport_destination = message.strip()
         hotel_place = re.search(
             r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
@@ -784,7 +833,7 @@ class TravelAgentGraph:
             current.transport_mode = "train"
         if re.search(r"\bBengali\s+food\b", message, re.IGNORECASE):
             current.preferences = list(dict.fromkeys([*(current.preferences or []), "Bengali food available"]))
-        if state.get("pending_clarification") == "origin" and not route:
+        if state.get("pending_clarification") == "origin" and not route and not flight_request:
             current.origin = message.strip()
 
         # --------------------------------------------------------
@@ -808,6 +857,8 @@ class TravelAgentGraph:
         )
 
         has_explicit_destination = bool(route or hotel_place)
+        if flight_origin_without_destination:
+            has_explicit_destination = True
 
         if not is_continuation:
             return {
@@ -825,12 +876,20 @@ class TravelAgentGraph:
 
         if not current.origin:
             current.origin = previous.get("origin")
-        if not current.transport_destination:
+        if not current.transport_destination and not flight_origin_without_destination:
             current.transport_destination = previous.get("transport_destination") or current.destination
         if state.get("pending_clarification") == "origin":
             # A one-word reply answers the outstanding origin question; it
             # must not replace the already established destination.
             current.destination = previous.get("destination") or current.destination
+        if flight_origin_without_destination:
+            current.destination = None
+            current.transport_destination = None
+            if current.hotel_destination:
+                current.destination = current.hotel_destination
+        if flight_clarification_reply and state.get("pending_clarification") == "flight_origin":
+            current.destination = previous.get("transport_destination") or previous.get("destination")
+            current.transport_destination = current.destination
         if not current.hotel_destination:
             current.hotel_destination = previous.get("hotel_destination") or current.destination
         if current.room_quantity is None:
@@ -1015,7 +1074,18 @@ class TravelAgentGraph:
 
         perception = state.get("perception")
 
-        destination = perception.destination if perception else None
+        # Flight endpoints are resolved by AirportResolver in the Duffel
+        # provider. A separate hotel destination in a combined request still
+        # uses geographic destination resolution for the hotel provider.
+        if perception and perception.transport_mode == "flight":
+            destination = perception.hotel_destination
+            if not destination:
+                return {
+                    "destination_resolution": {"status": "not_required"},
+                    "clarification_needed": False,
+                }
+        else:
+            destination = perception.destination if perception else None
 
         pending_clarification = state.get("pending_clarification")
         pending_destination = state.get("pending_destination")
@@ -1140,6 +1210,20 @@ class TravelAgentGraph:
 
         perception = state.get("perception")
 
+        acknowledgement = state.get("user_message", "").strip()
+        if (
+            perception
+            and acknowledgement
+            and re.fullmatch(
+                r"(?:ok(?:ay)?(?:\s+go ahead)?|go ahead|sure|continue|proceed|yes)[.!]*",
+                acknowledgement,
+                re.IGNORECASE,
+            )
+            and not state.get("pending_booking_confirmation")
+            and not state.get("pending_cancellation_booking_id")
+        ):
+            return "acknowledgement"
+
         if self._selected_destination_candidate(state) is not None:
             return "destination_selection"
 
@@ -1204,6 +1288,20 @@ class TravelAgentGraph:
                     return "cancel_booking"
 
                 return "wait_booking"
+
+        if (
+            perception
+            and perception.transport_mode == "flight"
+            and not perception.transport_destination
+        ):
+            return "flight_destination_clarification"
+        if (
+            perception
+            and perception.transport_mode == "flight"
+            and not perception.origin
+            and perception.transport_destination
+        ):
+            return "flight_destination_clarification"
 
         if perception and perception.intent == "recommend_hotel":
             if (
@@ -1303,6 +1401,38 @@ class TravelAgentGraph:
             return "new_booking"
 
         return "destination"
+
+    @staticmethod
+    def flight_destination_clarification_node(state: TravelState):
+        perception = state.get("perception")
+        if perception and not perception.origin:
+            question = "Where will you be flying from?"
+            pending = "flight_origin"
+        else:
+            question = "Where would you like to fly to?"
+            pending = "flight_destination"
+        return {
+            "messages": [AIMessage(content=question)],
+            "pending_clarification": pending,
+            "pending_destination": None,
+            "pending_destination_candidates": [],
+        }
+
+    @staticmethod
+    def acknowledgement_node(state: TravelState):
+        pending = state.get("pending_clarification")
+        if pending == "flight_destination":
+            message = "Where would you like to fly to?"
+        elif pending == "flight_origin":
+            message = "Which departure airport or city would you like to use?"
+        elif pending == "flight_airport_destination":
+            message = "Which arrival airport would you like to use?"
+        else:
+            message = "What would you like me to proceed with? Please specify the flight search or option."
+        return {
+            "messages": [AIMessage(content=message)],
+            "pending_clarification": pending,
+        }
 
     def destination_selection_node(self, state: TravelState):
         """Resolve a numeric reply from the persisted candidate list."""
@@ -4301,6 +4431,7 @@ unsupported information.
         hotel_search_error = None
         transport_search_performed = False
         transport_search_error = None
+        airport_clarification = None
 
         # ========================================================
         # 6. Execute every requested tool
@@ -4361,7 +4492,9 @@ unsupported information.
             # resolved by the application.
             # ----------------------------------------------------
 
-            if tool_context.resolved_destination:
+            if tool_context.resolved_destination and tool_call["name"] in {
+                "search_hotels", "get_weather"
+            }:
 
                 tool_args[
                     "resolved_destination"
@@ -4521,6 +4654,17 @@ unsupported information.
                             .removeprefix("TOOL_ERROR:")
                             .strip()
                         )
+                        if tool_name == "search_flights":
+                            if "Origin airport:" in transport_search_error and (
+                                "matches multiple airports" in transport_search_error
+                                or "No airport or city code found" in transport_search_error
+                            ):
+                                airport_clarification = "flight_origin"
+                            elif "Destination airport:" in transport_search_error and (
+                                "matches multiple airports" in transport_search_error
+                                or "No airport or city code found" in transport_search_error
+                            ):
+                                airport_clarification = "flight_destination"
 
                 try:
 
@@ -4608,6 +4752,11 @@ unsupported information.
 
             "transport_search_performed": transport_search_performed,
             "transport_search_error": transport_search_error,
+            **(
+                {"pending_clarification": airport_clarification}
+                if airport_clarification
+                else {}
+            ),
             "hotel_search_error": hotel_search_error,
             **(
                 {

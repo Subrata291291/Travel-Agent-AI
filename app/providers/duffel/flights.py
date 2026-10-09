@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.providers.duffel.airports import AirportResolver
+from app.providers.duffel.airports import AirportLookupError, AirportResolver
 from app.providers.duffel.client import DuffelClient
 from app.schemas.transport import TransportOption
 
@@ -46,8 +46,14 @@ class DuffelFlightProvider:
             NYC -> LAX
         """
 
-        origin = self.airports.resolve(origin)
-        destination = self.airports.resolve(destination)
+        try:
+            origin = self.airports.resolve(origin, field="origin")
+        except AirportLookupError as exc:
+            raise ValueError(f"Origin airport: {exc}") from exc
+        try:
+            destination = self.airports.resolve(destination, field="destination")
+        except AirportLookupError as exc:
+            raise ValueError(f"Destination airport: {exc}") from exc
 
         if travellers < 1:
             raise ValueError("travellers must be at least 1.")
