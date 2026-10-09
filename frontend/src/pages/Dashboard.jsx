@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
 import { getBookings } from "../services/bookingService";
+import { getUserDisplayName } from "../utils/userDisplay";
 
 function Dashboard() {
   const { user } = useAuth();
@@ -170,7 +171,7 @@ function Dashboard() {
         </p>
 
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
-          {user?.user_id || "Traveller"} 👋
+          {getUserDisplayName(user)} 👋
         </h1>
       </section>
 

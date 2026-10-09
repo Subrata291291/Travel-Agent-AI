@@ -148,6 +148,8 @@ def test_login_and_current_user(test_db):
             "user_id": TEST_USER_ID,
             "tenant_id": TEST_TENANT_ID,
             "role": "user",
+            "name": "Integration Test User",
+            "email": TEST_EMAIL,
         }
 
     finally:

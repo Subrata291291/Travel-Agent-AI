@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const TOKEN_KEY = "travel_agent_token";
+import { attachBearerToken } from "./authHeaders";
+import { readAuthToken } from "./authStorage";
+
 const defaultApiBaseUrl = import.meta.env.PROD
   ? ""
   : "http://127.0.0.1:8000";
@@ -21,13 +23,7 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem(TOKEN_KEY);
-
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
-    return config;
+    return attachBearerToken(config, readAuthToken());
   },
   (error) => {
     return Promise.reject(error);

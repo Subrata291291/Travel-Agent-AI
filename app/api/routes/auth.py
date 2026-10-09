@@ -203,4 +203,6 @@ def get_me(
         user_id=context.user_id,
         tenant_id=context.tenant_id,
         role=context.role,
+        name=context.name,
+        email=context.email,
     )

@@ -52,6 +52,16 @@ class CurrentUserResponse(BaseModel):
         description="Current role of the authenticated user."
     )
 
+    name: str | None = Field(
+        default=None,
+        description="Authenticated user's display name, when available.",
+    )
+
+    email: EmailStr | None = Field(
+        default=None,
+        description="Authenticated user's email address.",
+    )
+
 
 class RegistrationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)

@@ -18,6 +18,8 @@ class TenantContext:
     tenant_id: str
     user_id: str
     role: str = "user"
+    name: str | None = None
+    email: str | None = None
 
     def __post_init__(self):
         """

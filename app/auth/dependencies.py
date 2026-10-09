@@ -125,6 +125,8 @@ def get_current_user(
             user_id=user.user_id,
             tenant_id=user.tenant_id,
             role=user.role,
+            name=user.name,
+            email=user.email,
         )
 
     finally:

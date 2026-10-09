@@ -1,14 +1,17 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
 import api from "../services/api";
+import {
+  clearAuthToken,
+  readAuthToken,
+  storeAuthToken,
+} from "../services/authStorage";
 
 const AuthContext = createContext(null);
 
-const TOKEN_KEY = "travel_agent_token";
-
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => {
-    return localStorage.getItem(TOKEN_KEY);
+    return readAuthToken();
   });
 
   const [user, setUser] = useState(null);
@@ -30,7 +33,7 @@ export function AuthProvider({ children }) {
       console.error("Failed to load current user:", error);
 
       // Token is invalid/expired.
-      localStorage.removeItem(TOKEN_KEY);
+      clearAuthToken();
 
       setToken(null);
       setUser(null);
@@ -58,7 +61,7 @@ export function AuthProvider({ children }) {
   // --------------------------------------------------------
 
   const login = (accessToken) => {
-    localStorage.setItem(TOKEN_KEY, accessToken);
+    storeAuthToken(accessToken);
 
     setToken(accessToken);
     setLoading(true);
@@ -69,7 +72,7 @@ export function AuthProvider({ children }) {
   // --------------------------------------------------------
 
   const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
+    clearAuthToken();
 
     setToken(null);
     setUser(null);

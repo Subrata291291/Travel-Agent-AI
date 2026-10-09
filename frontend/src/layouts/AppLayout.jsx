@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { getUserDisplayName, getUserInitial } from "../utils/userDisplay";
 
 function AppLayout() {
   const { user, logout } = useAuth();
@@ -66,7 +67,7 @@ function AppLayout() {
             <div className="flex items-center gap-3 border-l border-slate-200 pl-3">
               <div className="hidden text-right sm:block">
                 <p className="text-sm font-semibold text-slate-800">
-                  {user?.user_id || "User"}
+                  {getUserDisplayName(user)}
                 </p>
 
                 <p className="text-xs capitalize text-slate-400">
@@ -75,7 +76,7 @@ function AppLayout() {
               </div>
 
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-slate-800 to-slate-950 text-sm font-bold text-white shadow-sm">
-                {user?.user_id?.charAt(0)?.toUpperCase() || "U"}
+                {getUserInitial(user)}
               </div>
             </div>
 
