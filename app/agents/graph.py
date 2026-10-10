@@ -354,6 +354,11 @@ class TravelAgentGraph:
         )
 
         graph.add_node(
+            "past_travel_date_clarification",
+            self.past_travel_date_clarification_node,
+        )
+
+        graph.add_node(
             "acknowledgement",
             self.acknowledgement_node,
         )
@@ -496,6 +501,7 @@ class TravelAgentGraph:
                 "wait_cancellation_confirmation": "wait_cancellation_confirmation",
                 "destination_selection": "destination_selection",
                 "flight_destination_clarification": "flight_destination_clarification",
+                "past_travel_date_clarification": "past_travel_date_clarification",
                 "acknowledgement": "acknowledgement",
                 "hotel_recommendation": "hotel_recommendation",
                 "budget_conflict": "budget_conflict",
@@ -513,6 +519,7 @@ class TravelAgentGraph:
         )
 
         graph.add_edge("flight_destination_clarification", END)
+        graph.add_edge("past_travel_date_clarification", END)
         graph.add_edge("acknowledgement", END)
 
         # ----------------------------------------------------
@@ -780,7 +787,8 @@ class TravelAgentGraph:
             corrected_destination = destination_correction.group(1).strip(" .,!?")
             current.destination = corrected_destination
             current.transport_destination = corrected_destination
-            current.hotel_destination = corrected_destination
+            if (state.get("trip_context") or {}).get("hotel_destination"):
+                current.hotel_destination = corrected_destination
         route = re.search(
             r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
@@ -909,7 +917,7 @@ class TravelAgentGraph:
             current.destination = previous.get("transport_destination") or previous.get("destination")
             current.transport_destination = current.destination
         if not current.hotel_destination:
-            current.hotel_destination = previous.get("hotel_destination") or current.destination
+            current.hotel_destination = previous.get("hotel_destination")
         elif destination_correction:
             current.hotel_destination = current.destination
         if current.room_quantity is None:
@@ -1332,6 +1340,9 @@ class TravelAgentGraph:
 
                 return "wait_booking"
 
+        if self._has_past_travel_date(perception):
+            return "past_travel_date_clarification"
+
         if (
             perception
             and perception.transport_mode == "flight"
@@ -1444,6 +1455,35 @@ class TravelAgentGraph:
             return "new_booking"
 
         return "destination"
+
+    @staticmethod
+    def _has_past_travel_date(perception) -> bool:
+        start_date = getattr(perception, "start_date", None)
+        if not start_date:
+            return False
+        try:
+            return date.fromisoformat(start_date) < date.today()
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def past_travel_date_clarification_node(state: TravelState):
+        """Stop searches for past dates and ask for a valid replacement."""
+
+        perception = state.get("perception")
+        start_date = getattr(perception, "start_date", None)
+        return {
+            "messages": [AIMessage(
+                content=(
+                    f"The departure date {start_date} has already passed. "
+                    "What future departure date should I use?"
+                )
+            )],
+            "pending_clarification": "travel_date",
+            "pending_destination": None,
+            "pending_destination_candidates": [],
+            "clarification_needed": True,
+        }
 
     @staticmethod
     def flight_destination_clarification_node(state: TravelState):

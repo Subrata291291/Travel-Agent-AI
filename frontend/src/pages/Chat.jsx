@@ -5,6 +5,10 @@ import {
 } from "react";
 
 import { sendChatMessage } from "../services/chatService";
+import {
+  acquireSubmissionLock,
+  insertAssistantResponse,
+} from "../services/chatMessageFlow";
 import InrPrice from "../components/InrPrice";
 import { useAuth } from "../context/AuthContext";
 import TravelAgentLogo from "../components/TravelAgentLogo";
@@ -64,6 +68,7 @@ function Chat() {
   const messagesEndRef = useRef(null);
 
   const textareaRef = useRef(null);
+  const sendingRef = useRef(false);
 
 
   // =========================================================
@@ -100,7 +105,7 @@ function Chat() {
         : input
     ).trim();
 
-    if (!message || loading) {
+    if (!message || loading || !acquireSubmissionLock(sendingRef)) {
       return;
     }
 
@@ -137,10 +142,11 @@ function Chat() {
         data: result,
       };
 
-      setMessages((previous) => [
-        ...previous,
+      setMessages((previous) => insertAssistantResponse(
+        previous,
+        userMessage.id,
         assistantMessage,
-      ]);
+      ));
 
     } catch (err) {
       console.error(
@@ -155,6 +161,7 @@ function Chat() {
       setError(message);
 
     } finally {
+      sendingRef.current = false;
       setLoading(false);
 
       setTimeout(() => {

@@ -1,4 +1,6 @@
 from app.agents.graph import TravelAgentGraph
+from app.database.repositories import WorkflowStateRepository
+from app.memory.conversation import ConversationMemory
 from app.schemas.perception import TripPerception
 
 
@@ -76,7 +78,7 @@ def test_destination_correction_clears_pending_airport_clarification_and_candida
     assert result["pending_destination_candidates"] == []
 
 
-def test_corrected_destination_is_resolved_without_reusing_stale_goa():
+def test_corrected_flight_destination_does_not_reuse_stale_geographic_goa():
     class Resolver:
         def __init__(self):
             self.queries = []
@@ -111,7 +113,74 @@ def test_corrected_destination_is_resolved_without_reusing_stale_goa():
         **extracted,
     })
 
-    assert graph.destination_resolver.queries == ["Manali"]
-    assert resolved["destination_resolution"]["location"]["name"] == "Manali"
-    assert resolved["pending_destination_candidates"] == []
+    assert graph.destination_resolver.queries == []
+    assert resolved["destination_resolution"]["status"] == "not_required"
+    assert extracted["pending_destination_candidates"] == []
+
+
+def test_geographic_follow_up_after_correction_is_not_treated_as_old_airport_reply():
+    class Resolver:
+        def __init__(self):
+            self.queries = []
+
+        def resolve(self, query):
+            self.queries.append(query)
+            return {
+                "status": "resolved",
+                "location": {"name": "Manali", "admin1": "Himachal Pradesh", "country": "India"},
+                "candidates": [],
+            }
+
+    class FollowUpPerception:
+        def understand(self, message, _history):
+            destination = "Manali, Himachal Pradesh, India" if message.startswith("Manali") else "Goa"
+            return TripPerception(
+                intent="find_transport", destination=destination,
+                transport_destination=destination, origin="Howrah",
+                travellers=1, transport_mode="flight",
+            )
+
+    graph = _graph()
+    graph.destination_resolver = Resolver()
+    graph.perception_agent = FollowUpPerception()
+    first_state = _state(
+        "Actually, change the destination to Manali.",
+        pending="flight_destination",
+        pending_destination="Goa",
+        candidates=[{"iata_code": "GOA"}],
+    )
+    corrected = graph.perception_node(first_state)
+    second_state = {
+        **first_state,
+        "user_message": "Manali, Himachal Pradesh, India",
+        "pending_clarification": corrected["pending_clarification"],
+        "pending_destination": corrected["pending_destination"],
+        "pending_destination_candidates": corrected["pending_destination_candidates"],
+        "trip_context": graph._build_trip_context(corrected["perception"]),
+    }
+    follow_up = graph.perception_node(second_state)
+    resolved = graph.destination_resolver_node({**second_state, **follow_up})
+
+    assert follow_up["perception"].destination == "Manali, Himachal Pradesh, India"
+    # Flight destinations are handled by the airport resolver in transport
+    # search; they must not be sent to the geographic destination resolver.
+    assert graph.destination_resolver.queries == []
+    assert resolved["destination_resolution"]["status"] == "not_required"
+    assert resolved.get("pending_clarification") is None
+
+
+def test_new_session_does_not_inherit_another_sessions_pending_clarification(test_db):
+    repository = WorkflowStateRepository(test_db)
+    old_session_key = ConversationMemory._owned_session_id("old-session", "user")
+    new_session_key = ConversationMemory._owned_session_id("new-session", "user")
+
+    repository.save_workflow_state(
+        session_id=old_session_key,
+        user_id="user",
+        tenant_id="tenant",
+        state='{"pending_clarification":"flight_destination","pending_destination":"Goa"}',
+    )
+
+    assert repository.get_workflow_state(old_session_key, "tenant") is not None
+    assert repository.get_workflow_state(new_session_key, "tenant") is None
 
