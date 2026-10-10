@@ -1529,12 +1529,15 @@ class TravelAgentGraph:
 
         perception = state.get("perception")
         if perception is not None:
-            perception.destination = ", ".join(
+            canonical_destination = ", ".join(
                 part for part in (
                     candidate.get("name"), candidate.get("admin1"), candidate.get("country")
                 ) if part
             )
-            perception.hotel_destination = perception.destination
+            perception.destination = canonical_destination
+            if perception.transport_destination:
+                perception.transport_destination = canonical_destination
+            perception.hotel_destination = canonical_destination
 
         print(
             "[DestinationSelection] Selected candidate: "

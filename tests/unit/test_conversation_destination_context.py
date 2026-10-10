@@ -65,7 +65,10 @@ def test_short_howrah_reply_resolves_pending_origin():
 def test_canonical_candidate_is_persisted_in_perception():
     graph = TravelAgentGraph.__new__(TravelAgentGraph)
     canonical = {"name": "Manali", "admin1": "Himachal Pradesh", "country": "India"}
-    perception = TripPerception(intent="plan_trip", destination="Goa")
+    perception = TripPerception(
+        intent="find_transport", destination="Goa",
+        transport_destination="Goa", transport_mode="flight",
+    )
     result = graph.destination_selection_node({
         "pending_clarification": "destination",
         "pending_destination_candidates": [canonical],
@@ -73,6 +76,7 @@ def test_canonical_candidate_is_persisted_in_perception():
     })
     assert result["destination_resolution"]["status"] == "resolved"
     assert perception.destination == "Manali, Himachal Pradesh, India"
+    assert perception.transport_destination == "Manali, Himachal Pradesh, India"
 
 
 def test_new_explicit_route_does_not_get_prefixed_with_old_pending_destination():
