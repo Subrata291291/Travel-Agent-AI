@@ -771,6 +771,16 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
+        destination_correction = re.search(
+            r"\b(?:actually\s*,?\s*)?(?:change|update|replace|set)\s+(?:the\s+)?destination\s+(?:to|as)\s+(.+?)(?=\s+(?:and|but|for|on|with)\b|[.!?]|$)",
+            message,
+            re.IGNORECASE,
+        )
+        if destination_correction:
+            corrected_destination = destination_correction.group(1).strip(" .,!?")
+            current.destination = corrected_destination
+            current.transport_destination = corrected_destination
+            current.hotel_destination = corrected_destination
         route = re.search(
             r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
@@ -802,6 +812,7 @@ class TravelAgentGraph:
                 current.transport_destination = None
         flight_clarification_reply = (
             not flight_request
+            and not destination_correction
             and state.get("pending_clarification")
             in {"flight_origin", "flight_destination"}
         )
@@ -856,14 +867,21 @@ class TravelAgentGraph:
             or bool(previous)
         )
 
-        has_explicit_destination = bool(route or hotel_place)
+        has_explicit_destination = bool(route or hotel_place or destination_correction)
         if flight_origin_without_destination:
             has_explicit_destination = True
 
         if not is_continuation:
-            return {
+            result = {
                 "perception": current
             }
+            if destination_correction:
+                result.update({
+                    "pending_clarification": None,
+                    "pending_destination": None,
+                    "pending_destination_candidates": [],
+                })
+            return result
 
         # --------------------------------------------------------
         # 5. Preserve destination
@@ -892,6 +910,8 @@ class TravelAgentGraph:
             current.transport_destination = current.destination
         if not current.hotel_destination:
             current.hotel_destination = previous.get("hotel_destination") or current.destination
+        elif destination_correction:
+            current.hotel_destination = current.destination
         if current.room_quantity is None:
             current.room_quantity = previous.get("room_quantity")
 
@@ -1018,9 +1038,18 @@ class TravelAgentGraph:
         # 14. Return the merged perception
         # --------------------------------------------------------
 
-        return {
+        result = {
             "perception": current
         }
+        if destination_correction:
+            result.update({
+                "pending_clarification": None,
+                "pending_destination": None,
+                "pending_destination_candidates": [],
+                "destination_resolution": None,
+                "tool_context": None,
+            })
+        return result
 
     # ========================================================
     # NODE 2 — PLANNER
@@ -1089,6 +1118,14 @@ class TravelAgentGraph:
 
         pending_clarification = state.get("pending_clarification")
         pending_destination = state.get("pending_destination")
+        explicit_destination_correction = bool(re.search(
+            r"\b(?:actually\s*,?\s*)?(?:change|update|replace|set)\s+(?:the\s+)?destination\s+(?:to|as)\s+.+?(?=\s+(?:and|but|for|on|with)\b|[.!?]|$)",
+            state.get("user_message", ""),
+            re.IGNORECASE,
+        ))
+        if explicit_destination_correction:
+            pending_clarification = None
+            pending_destination = None
 
         # Older workflow state may contain a model-generated destination
         # copied from an assistant hotel listing. Do not prepend that stale
@@ -1116,6 +1153,7 @@ class TravelAgentGraph:
             pending_clarification == "destination"
             and pending_destination
             and destination
+            and not explicit_destination_correction
             and not re.search(r"\bfrom\s+.+?\s+to\s+", state.get("user_message", ""), re.IGNORECASE)
             and not re.search(r"\bhotels?\s+(?:in|at)\s+", state.get("user_message", ""), re.IGNORECASE)
         ):
@@ -1150,6 +1188,11 @@ class TravelAgentGraph:
                     "status": "not_required"
                 },
                 "clarification_needed": False,
+                **({
+                    "pending_clarification": None,
+                    "pending_destination": None,
+                    "pending_destination_candidates": [],
+                } if explicit_destination_correction else {}),
             }
 
         # ----------------------------------------------------
