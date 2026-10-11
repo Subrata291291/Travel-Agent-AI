@@ -47,6 +47,22 @@ _DESTINATION_CORRECTION_PATTERNS = (
     ),
 )
 _DESTINATION_CLARIFICATIONS = {"destination", "flight_destination", "flight_airport_destination"}
+_DESTINATION_OPTION_PREFIX = re.compile(
+    r"^\s*(?:option\s*)?#?\s*\d+\s*[:.)\-–—]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_destination_option_label(value: str | None) -> str | None:
+    """Remove a UI option number accidentally copied into a place name."""
+    if not value:
+        return value
+    cleaned = _DESTINATION_OPTION_PREFIX.sub("", value).strip(" ,.!?;:")
+    return cleaned or None
+
+
+def _has_destination_option_label(value: str | None) -> bool:
+    return bool(value and _DESTINATION_OPTION_PREFIX.match(value))
 
 
 def _extract_destination_correction(message: str) -> str | None:
@@ -933,6 +949,29 @@ class TravelAgentGraph:
 
         previous = state.get("trip_context") or {}
 
+        # The LLM sometimes copies the numbered display line from an earlier
+        # clarification (for example, "option 1: Srinagar, ...") into its
+        # structured destination. The display label is not destination data;
+        # when present, retain the canonical destination saved in trip state.
+        if _has_destination_option_label(current.destination):
+            current.destination = _strip_destination_option_label(
+                previous.get("destination")
+                or previous.get("transport_destination")
+                or current.destination
+            )
+        if _has_destination_option_label(current.transport_destination):
+            current.transport_destination = _strip_destination_option_label(
+                previous.get("transport_destination")
+                or previous.get("destination")
+                or current.transport_destination
+            )
+        if _has_destination_option_label(current.hotel_destination):
+            current.hotel_destination = _strip_destination_option_label(
+                previous.get("hotel_destination")
+                or previous.get("destination")
+                or current.hotel_destination
+            )
+
         # --------------------------------------------------------
         # 4. Decide whether this is a continuation
         #
@@ -1652,6 +1691,9 @@ class TravelAgentGraph:
                     candidate.get("name"), candidate.get("admin1"), candidate.get("country")
                 ) if part
             )
+            canonical_destination = _strip_destination_option_label(
+                canonical_destination
+            ) or canonical_destination
             perception.destination = canonical_destination
             if perception.transport_destination:
                 perception.transport_destination = canonical_destination
@@ -4671,17 +4713,26 @@ unsupported information.
                 if perception and perception.end_date:
                     tool_args["check_out_date"] = perception.end_date
             elif tool_call["name"] in {"search_trains", "search_flights", "search_buses"}:
+                canonical_destination = None
                 if tool_context.resolved_destination:
                     location = tool_context.resolved_destination
                     canonical_parts = [
                         getattr(location, field, None)
                         for field in ("name", "admin1", "country")
                     ]
-                    tool_args["destination"] = ", ".join(
+                    canonical_destination = ", ".join(
                         part for part in canonical_parts if part
                     )
-                if perception and perception.transport_destination:
-                    tool_args["destination"] = perception.transport_destination
+                if not canonical_destination and perception:
+                    canonical_destination = (
+                        perception.transport_destination
+                        or perception.destination
+                    )
+                if canonical_destination:
+                    tool_args["destination"] = (
+                        _strip_destination_option_label(canonical_destination)
+                        or canonical_destination
+                    )
                 if tool_context.origin:
                     tool_args["origin"] = tool_context.origin
                 if tool_context.travellers:
