@@ -3,6 +3,7 @@ from datetime import date
 from typing import Annotated, TypedDict
 import json
 import re
+import inspect
 
 from sqlalchemy.orm import Session
 
@@ -284,7 +285,7 @@ class TravelAgentGraph:
 
         self.tool_executor = ToolExecutor()
 
-        self.memory = ConversationMemory()
+        self.memory = ConversationMemory(self.router)
 
         self.destination_resolver = DestinationResolver()
 
@@ -737,6 +738,7 @@ class TravelAgentGraph:
     def perception_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext] | None = None,
     ):
         """
         Understand the current user message and merge it with
@@ -762,10 +764,15 @@ class TravelAgentGraph:
         # 1. Get conversation history
         # --------------------------------------------------------
 
+        history_parameters = inspect.signature(self.memory.get_messages).parameters
+        history_kwargs = {}
+        if "db" in history_parameters:
+            history_kwargs["db"] = runtime.context.db if runtime else None
         conversation_history = self.memory.get_messages(
             state["session_id"],
             state["tenant_id"],
             state["user_id"],
+            **history_kwargs,
         )
 
         # --------------------------------------------------------
@@ -1066,17 +1073,21 @@ class TravelAgentGraph:
     def planner_node(
         self,
         state: TravelState,
+        runtime: Runtime[GraphContext] | None = None,
     ):
         """
         Convert perception into an executable travel plan.
         """
 
-        memory_context = (
-            self.memory.get_context(
-                state["session_id"],
-                state["tenant_id"],
-                state["user_id"],
-            )
+        context_parameters = inspect.signature(self.memory.get_context).parameters
+        context_kwargs = {}
+        if "query" in context_parameters:
+            context_kwargs["query"] = state["user_message"]
+        if "db" in context_parameters:
+            context_kwargs["db"] = runtime.context.db if runtime else None
+        memory_context = self.memory.get_context(
+            state["session_id"], state["tenant_id"], state["user_id"],
+            **context_kwargs,
         )
 
         memory_context["resolved_destination"] = (
@@ -4881,24 +4892,33 @@ unsupported information.
         # Save user message
         # ----------------------------------------------------
 
+        add_parameters = inspect.signature(self.memory.add_message).parameters
+        add_kwargs = {"db": db} if "db" in add_parameters else {}
         self.memory.add_message(
             session_id,
             tenant_id,
             "human",
             user_message,
             user_id,
+            **add_kwargs,
         )
+
+        # Extract only when a stable-preference cue is present. Failures are
+        # isolated inside LongTermMemory and never interrupt the travel turn.
+        memory_preferences = getattr(self.memory, "preferences", None)
+        if memory_preferences is not None:
+            memory_preferences.extract_and_store(
+                db, user_id, tenant_id, user_message
+            )
 
         # ----------------------------------------------------
         # Load previous workflow state
         # ----------------------------------------------------
 
-        workflow_state = (
-            self.memory.get_workflow_state(
-                session_id,
-                tenant_id,
-                user_id,
-            )
+        workflow_parameters = inspect.signature(self.memory.get_workflow_state).parameters
+        workflow_kwargs = {"db": db} if "db" in workflow_parameters else {}
+        workflow_state = self.memory.get_workflow_state(
+            session_id, tenant_id, user_id, **workflow_kwargs
         )
 
         # Normalize state persisted by older runs before restoring it.
@@ -5071,6 +5091,8 @@ unsupported information.
         # Persist workflow state
         # ----------------------------------------------------
 
+        save_parameters = inspect.signature(self.memory.save_workflow_state).parameters
+        save_kwargs = {"db": db} if "db" in save_parameters else {}
         self.memory.save_workflow_state(
             session_id,
             user_id,
@@ -5130,6 +5152,7 @@ unsupported information.
                     "booking"
                 ),
             },
+            **save_kwargs,
         )
 
         # ----------------------------------------------------
@@ -5159,12 +5182,15 @@ unsupported information.
 
         if final_message.content:
 
+            add_parameters = inspect.signature(self.memory.add_message).parameters
+            add_kwargs = {"db": db} if "db" in add_parameters else {}
             self.memory.add_message(
                 session_id,
                 tenant_id,
                 "assistant",
                 final_message.content,
                 user_id,
+                **add_kwargs,
             )
 
         # ----------------------------------------------------

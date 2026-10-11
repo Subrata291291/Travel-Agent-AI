@@ -1,5 +1,5 @@
 from app.memory.short_term import ShortTermMemory
-from app.memory.preferences import PreferenceMemory
+from app.memory.long_term import LongTermMemory
 from app.database.connection import SessionLocal
 from app.database.repositories import WorkflowStateRepository
 import json
@@ -7,15 +7,13 @@ import hashlib
 
 class ConversationMemory:
 
-    def __init__(self):
+    def __init__(self, llm_router=None):
 
         self.short_term = (
             ShortTermMemory()
         )
 
-        self.preferences = (
-            PreferenceMemory()
-        )
+        self.preferences = LongTermMemory(llm_router)
 
     # ========================================================
     # Conversation messages
@@ -28,6 +26,7 @@ class ConversationMemory:
         role: str,
         content: str,
         user_id: str | None = None,
+        db=None,
     ):
 
         self.short_term.add_message(
@@ -36,6 +35,7 @@ class ConversationMemory:
             role,
             content,
             user_id,
+            db,
         )
 
     def get_messages(
@@ -43,37 +43,23 @@ class ConversationMemory:
         session_id: str,
         tenant_id: str,
         user_id: str | None = None,
+        db=None,
     ):
 
         return self.short_term.get_messages(
             session_id,
             tenant_id,
             user_id,
+            db,
         )
 
     # ========================================================
     # User preferences
     # ========================================================
 
-    def add_preference(
-        self,
-        user_id: str,
-        preference: str,
-    ):
-
-        self.preferences.add_preference(
-            user_id,
-            preference,
-        )
-
-    def get_preferences(
-        self,
-        user_id: str,
-    ):
-
-        return self.preferences.get_preferences(
-            user_id
-        )
+    def add_preference(self, user_id: str, preference: str):
+        """Legacy in-memory preference writes are intentionally no longer used."""
+        return None
 
     # ========================================================
     # Conversation context
@@ -84,6 +70,8 @@ class ConversationMemory:
         session_id: str,
         tenant_id: str,
         user_id: str,
+        query: str = "",
+        db=None,
     ):
 
         context = {
@@ -93,22 +81,23 @@ class ConversationMemory:
                     session_id,
                     tenant_id,
                     user_id,
+                    db,
                 )
             ),
 
-            "user_preferences": (
-                self.get_preferences(
-                    user_id
-                )
-            ),
+            "user_preferences": [],
         }
 
-        workflow_state = (
-            self.get_workflow_state(
-                session_id,
-                tenant_id,
-                user_id,
-            )
+        if db is not None and tenant_id:
+            context["user_preferences"] = [
+                {"text": memory.text, "topic": memory.topic}
+                for memory, _score in self.preferences.retrieve(
+                    db, user_id, tenant_id, query, limit=5
+                )
+            ]
+
+        workflow_state = self.get_workflow_state(
+            session_id, tenant_id, user_id, db=db
         )
 
         context.update(
@@ -127,9 +116,12 @@ class ConversationMemory:
         user_id: str,
         tenant_id: str,
         state: dict,
+        db=None,
     ):
 
-        db = SessionLocal()
+        owns_db = db is None
+        if owns_db:
+            db = SessionLocal()
 
         try:
 
@@ -146,16 +138,20 @@ class ConversationMemory:
 
         finally:
 
-            db.close()
+            if owns_db:
+                db.close()
 
     def get_workflow_state(
         self,
         session_id: str,
         tenant_id: str,
         user_id: str | None = None,
+        db=None,
     ):
 
-        db = SessionLocal()
+        owns_db = db is None
+        if owns_db:
+            db = SessionLocal()
 
         try:
 
@@ -189,16 +185,20 @@ class ConversationMemory:
 
         finally:
 
-            db.close()
+            if owns_db:
+                db.close()
 
     def clear_workflow_state(
         self,
         session_id: str,
         tenant_id: str,
         user_id: str | None = None,
+        db=None,
     ):
 
-        db = SessionLocal()
+        owns_db = db is None
+        if owns_db:
+            db = SessionLocal()
 
         try:
 
@@ -213,7 +213,8 @@ class ConversationMemory:
 
         finally:
 
-            db.close()
+            if owns_db:
+                db.close()
 
     @staticmethod
     def _owned_session_id(session_id: str, user_id: str | None) -> str:

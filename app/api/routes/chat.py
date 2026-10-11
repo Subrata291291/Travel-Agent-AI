@@ -1,17 +1,19 @@
 from fastapi import APIRouter, Depends
+import logging
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.agents.graph import TravelAgentGraph
 from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
-from app.database.connection import get_db
+from app.database.connection import describe_database_session, get_db
 
 
 router = APIRouter(
     prefix="/chat",
     tags=["Chat"],
 )
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -94,6 +96,7 @@ def chat(
     Both identities come from the validated JWT.
     """
 
+    logger.info("Chat persistence database session: %s", describe_database_session(db))
     result = travel_agent_graph.run(
         user_message=request.message,
         user_id=context.user_id,

@@ -394,6 +394,72 @@ class WorkflowState(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+
+class UserMemory(Base):
+    """A durable, evidence-backed preference owned by one user and tenant."""
+
+    __tablename__ = "user_memories"
+    __table_args__ = (
+        Index("ix_user_memories_owner_status", "user_id", "tenant_id", "status"),
+    )
+
+    memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True
+    )
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+    topic: Mapped[str] = mapped_column(String(80), nullable=False, default="general")
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="semantic")
+    importance: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
+    source_quote: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class UserMemoryEmbedding(Base):
+    """Derived vector data; UserMemory remains the lifecycle authority."""
+
+    __tablename__ = "user_memory_embeddings"
+    __table_args__ = (Index("ix_user_memory_embeddings_model_dimensions", "model", "dimensions"),)
+
+    memory_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("user_memories.memory_id", ondelete="CASCADE"), primary_key=True
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    vector_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class ConversationMessage(Base):
+    """Durable short-term chat history, separate from workflow state/preferences."""
+
+    __tablename__ = "conversation_messages"
+    __table_args__ = (
+        Index("ix_conversation_messages_scope_order", "tenant_id", "user_id", "session_key", "message_id"),
+    )
+
+    message_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
 class Tenant(Base):
     """
     Represents one customer/account in the SaaS platform.

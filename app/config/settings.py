@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openrouter_api_key: str = ""
     google_api_key: str = ""
+    google_embedding_model: str = "gemini-embedding-2"
+    google_embedding_dimensions: int = 768
     openai_api_key: str = ""
 
     # =========================

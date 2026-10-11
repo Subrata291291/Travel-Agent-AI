@@ -1,5 +1,6 @@
 import os
 from collections.abc import Mapping
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -37,6 +38,24 @@ def resolve_database_url(
     environ = os.environ if environ is None else environ
     environment_url = environ.get("DATABASE_URL", "").strip()
     return normalize_database_url(environment_url or configured_url)
+
+
+def describe_database_session(db) -> str:
+    """Return a safe diagnostic target and identity for a request session."""
+    bind = db.get_bind()
+    url = bind.url
+    session_id = f"{id(db):x}"
+    if url.get_backend_name() == "sqlite":
+        database = url.database
+        if database in (None, ":memory:"):
+            target = "sqlite::memory:"
+        else:
+            path = Path(database)
+            target = f"sqlite:{path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()}"
+    else:
+        # Do not expose credentials, hosts, or database names in request logs.
+        target = url.get_backend_name()
+    return f"{target}; session={session_id}"
 
 
 database_url = resolve_database_url(settings.database_url)
@@ -84,7 +103,7 @@ def init_db():
     """
 
     # Importing the model registers it with Base.metadata.
-    from app.database.models import Booking  # noqa: F401
+    from app.database.models import Booking, UserMemory  # noqa: F401
 
     Base.metadata.create_all(
         bind=engine

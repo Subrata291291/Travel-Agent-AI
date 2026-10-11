@@ -1,4 +1,9 @@
 from typing import Dict, List
+import hashlib
+
+from sqlalchemy import select
+
+from app.database.models import ConversationMessage
 
 
 class ShortTermMemory:
@@ -37,7 +42,21 @@ class ShortTermMemory:
         role: str,
         content: str,
         user_id: str | None = None,
+        db=None,
     ) -> None:
+
+        if db is not None:
+            if not user_id:
+                raise ValueError("user_id is required for persistent conversation history")
+            db.add(ConversationMessage(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_key=self._persistent_session_key(session_id, user_id),
+                role=role,
+                content=content,
+            ))
+            db.commit()
+            return
 
         session_key = self._build_session_key(
             tenant_id,
@@ -60,7 +79,26 @@ class ShortTermMemory:
         session_id: str,
         tenant_id: str,
         user_id: str | None = None,
+        db=None,
     ) -> List[dict]:
+
+        if db is not None:
+            if not user_id:
+                return []
+            rows = db.scalars(
+                select(ConversationMessage)
+                .where(
+                    ConversationMessage.tenant_id == tenant_id,
+                    ConversationMessage.user_id == user_id,
+                    ConversationMessage.session_key == self._persistent_session_key(session_id, user_id),
+                )
+                .order_by(ConversationMessage.message_id.desc())
+                .limit(100)
+            ).all()
+            return [
+                {"role": item.role, "content": item.content}
+                for item in reversed(rows)
+            ]
 
         session_key = self._build_session_key(
             tenant_id,
@@ -72,6 +110,10 @@ class ShortTermMemory:
             session_key,
             []
         )
+
+    @staticmethod
+    def _persistent_session_key(session_id: str, user_id: str) -> str:
+        return hashlib.sha256(f"{user_id}:{session_id}".encode("utf-8")).hexdigest()
 
     def clear_session(
         self,

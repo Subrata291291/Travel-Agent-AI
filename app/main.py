@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.bookings import router as bookings_router
+from app.api.routes.memories import router as memories_router
 from app.config.settings import settings
 from app.api.routes import admin
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +54,8 @@ app.include_router(
     bookings_router,
     prefix="/api/v1",
 )
+
+app.include_router(memories_router, prefix="/api/v1")
 
 app.include_router(
     admin.router,           

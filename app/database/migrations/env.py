@@ -23,6 +23,9 @@ from app.database.models import (
     Booking,
     HotelBooking,
     WorkflowState,
+    UserMemory,
+    UserMemoryEmbedding,
+    ConversationMessage,
 )
 
 
