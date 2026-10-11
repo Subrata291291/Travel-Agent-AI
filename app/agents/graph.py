@@ -35,6 +35,59 @@ from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
 from app.schemas.hotel_booking import HotelBookingRequest
 
+
+_DESTINATION_CORRECTION_PATTERNS = (
+    re.compile(
+        r"\b(?:actually\s*,?\s*)?(?:change|update|replace|set)\s+(?:the\s+)?destination\s+(?:to|as)\s+(.+?)(?=[.!?\n]|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:my\s+intended\s+destination\s+is|the\s+intended\s+destination\s+is|my\s+destination\s+is|destination\s+is|i\s+mean|i\s+meant|i\s+intend\s+to\s+go\s+to|i\s+want\s+to\s+(?:go|travel)\s+to|i(?:'m|\s+am)\s+planning\s+(?:a\s+trip\s+)?to|let(?:'s|\s+us)\s+go\s+to)\s+(.+?)(?=[.!?\n]|$)",
+        re.IGNORECASE,
+    ),
+)
+_DESTINATION_CLARIFICATIONS = {"destination", "flight_destination", "flight_airport_destination"}
+
+
+def _extract_destination_correction(message: str) -> str | None:
+    """Extract a positive, explicit destination correction from the current turn."""
+    for pattern in _DESTINATION_CORRECTION_PATTERNS:
+        match = pattern.search(message)
+        if not match:
+            continue
+        destination = match.group(1).strip(" ,.!?;:")
+        # Normalize common prose ordering into the usual place, region, country
+        # geocoder form without relying on any specific city or region.
+        region_after_country = re.fullmatch(
+            r"(.+?),\s*([^,]+),\s*in\s+(?:(?:the\s+)?(?:union territory|state|province|region)\s+of\s+)(.+)",
+            destination,
+            re.IGNORECASE,
+        )
+        if region_after_country:
+            place, country, region = (part.strip(" ,.!?") for part in region_after_country.groups())
+            destination = f"{place}, {region}, {country}"
+        return destination or None
+    return None
+
+
+def _extract_explicit_origin(message: str) -> str | None:
+    match = re.search(
+        r"\b(?:my\s+)?origin\s+is\s+(.+?)(?=[.!?\n]|$)",
+        message,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(
+            r"\bfrom\s+(.+?)(?=\s+(?:to|next|last|this|on|for|and|but|during)\b|[.!?\n]|$)",
+            message,
+            re.IGNORECASE,
+        )
+    return match.group(1).strip(" ,.!?;") if match else None
+
+
+def _pending_after_destination_correction(pending: str | None) -> str | None:
+    return None if pending in _DESTINATION_CLARIFICATIONS else pending
+
 # ============================================================
 # STATE
 # ============================================================
@@ -792,25 +845,24 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
-        destination_correction = re.search(
-            r"\b(?:actually\s*,?\s*)?(?:change|update|replace|set)\s+(?:the\s+)?destination\s+(?:to|as)\s+(.+?)(?=\s+(?:and|but|for|on|with)\b|[.!?]|$)",
-            message,
-            re.IGNORECASE,
-        )
+        destination_correction = _extract_destination_correction(message)
         if destination_correction:
-            corrected_destination = destination_correction.group(1).strip(" .,!?")
-            current.destination = corrected_destination
-            current.transport_destination = corrected_destination
+            current.destination = destination_correction
+            current.transport_destination = destination_correction
             if (state.get("trip_context") or {}).get("hotel_destination"):
-                current.hotel_destination = corrected_destination
+                current.hotel_destination = destination_correction
         route = re.search(
             r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
         if route:
             current.origin = route.group(1).strip(" .,!?")
-            current.destination = route.group(2).strip(" .,!?")
-            current.transport_destination = current.destination
+            if not destination_correction:
+                current.destination = route.group(2).strip(" .,!?")
+                current.transport_destination = current.destination
+        explicit_origin = _extract_explicit_origin(message)
+        if explicit_origin:
+            current.origin = explicit_origin
         flight_request = bool(re.search(
             r"\b(?:flight|air\s*ticket|airline|fly|flying)\b",
             message,
@@ -818,7 +870,7 @@ class TravelAgentGraph:
         ))
         explicit_flight_origin = None
         flight_origin_without_destination = False
-        if flight_request and not route:
+        if flight_request and not route and not destination_correction:
             origin_match = re.search(
                 r"\bfrom\s+(.+?)(?=\s+(?:to|for|on|and|with)\b|[,.;!?]|$)",
                 message,
@@ -850,7 +902,7 @@ class TravelAgentGraph:
             r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
-        if hotel_place:
+        if hotel_place and not destination_correction:
             current.hotel_destination = hotel_place.group(1).strip(" .,!?")
             current.destination = current.hotel_destination
         traveller_match = re.search(
@@ -866,7 +918,13 @@ class TravelAgentGraph:
             current.transport_mode = "train"
         if re.search(r"\bBengali\s+food\b", message, re.IGNORECASE):
             current.preferences = list(dict.fromkeys([*(current.preferences or []), "Bengali food available"]))
-        if state.get("pending_clarification") == "origin" and not route and not flight_request:
+        if (
+            state.get("pending_clarification") == "origin"
+            and not route
+            and not flight_request
+            and not destination_correction
+            and not explicit_origin
+        ):
             current.origin = message.strip()
 
         # --------------------------------------------------------
@@ -899,7 +957,9 @@ class TravelAgentGraph:
             }
             if destination_correction:
                 result.update({
-                    "pending_clarification": None,
+                    "pending_clarification": _pending_after_destination_correction(
+                        state.get("pending_clarification")
+                    ),
                     "pending_destination": None,
                     "pending_destination_candidates": [],
                 })
@@ -1065,7 +1125,9 @@ class TravelAgentGraph:
         }
         if destination_correction:
             result.update({
-                "pending_clarification": None,
+                "pending_clarification": _pending_after_destination_correction(
+                    state.get("pending_clarification")
+                ),
                 "pending_destination": None,
                 "pending_destination_candidates": [],
                 "destination_resolution": None,
@@ -1144,13 +1206,13 @@ class TravelAgentGraph:
 
         pending_clarification = state.get("pending_clarification")
         pending_destination = state.get("pending_destination")
-        explicit_destination_correction = bool(re.search(
-            r"\b(?:actually\s*,?\s*)?(?:change|update|replace|set)\s+(?:the\s+)?destination\s+(?:to|as)\s+.+?(?=\s+(?:and|but|for|on|with)\b|[.!?]|$)",
-            state.get("user_message", ""),
-            re.IGNORECASE,
-        ))
+        explicit_destination_correction = bool(
+            _extract_destination_correction(state.get("user_message", ""))
+        )
         if explicit_destination_correction:
-            pending_clarification = None
+            pending_clarification = _pending_after_destination_correction(
+                pending_clarification
+            )
             pending_destination = None
 
         # Older workflow state may contain a model-generated destination
@@ -1158,7 +1220,9 @@ class TravelAgentGraph:
         # inventory text to a new, explicit destination from the user.
         if self._looks_like_inventory_not_a_place(pending_destination):
             pending_destination = None
-            pending_clarification = None
+            pending_clarification = _pending_after_destination_correction(
+                pending_clarification
+            )
 
         # ----------------------------------------------------
         # Handle previous clarification
@@ -1215,7 +1279,7 @@ class TravelAgentGraph:
                 },
                 "clarification_needed": False,
                 **({
-                    "pending_clarification": None,
+                    "pending_clarification": pending_clarification,
                     "pending_destination": None,
                     "pending_destination_candidates": [],
                 } if explicit_destination_correction else {}),
@@ -1238,7 +1302,7 @@ class TravelAgentGraph:
             return {
                 "destination_resolution": result,
                 "clarification_needed": False,
-                "pending_clarification": None,
+                "pending_clarification": pending_clarification,
                 "pending_destination": None,
                 "pending_destination_candidates": [],
                 "tool_context": None,
