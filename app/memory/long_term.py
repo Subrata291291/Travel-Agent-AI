@@ -6,7 +6,7 @@ import logging
 import re
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,17 @@ class MemoryExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memories: list[MemoryCandidate] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_candidate_list(cls, value):
+        """Accept a bare candidate list as the schema's memories collection."""
+        if isinstance(value, list):
+            if len(value) > 5:
+                raise ValueError("At most five memories may be extracted")
+            # Validate every candidate; never filter or invent partial output.
+            return {"memories": value}
+        return value
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
@@ -230,6 +241,7 @@ class LongTermMemory:
             return 0
         prompt = (
             "Extract at most five explicit, stable travel preferences from this single user message. "
+            "Return a JSON object with a 'memories' array matching the requested schema. "
             "Do not infer personal facts or sensitive attributes. Ignore destinations, dates, budgets "
             "for one trip, current booking instructions, and small talk. source_quote must be an exact "
             "substring of the message. Return an empty memories list when nothing qualifies.\n"

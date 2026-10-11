@@ -266,6 +266,11 @@ class LLMRouter:
         failure, the next configured provider is tried.
         """
 
+        # Groq's JSON-object response mode requires the prompt to mention JSON.
+        # Add the instruction only when the caller has not already done so.
+        if isinstance(prompt, str) and "json" not in prompt.casefold():
+            prompt = f"{prompt}\n\nReturn only JSON matching the requested schema."
+
         errors = []
 
         for provider_name in self.provider_order:
@@ -287,12 +292,19 @@ class LLMRouter:
                 # Invoke the structured model.
                 response = structured_llm.invoke(prompt)
 
+                if isinstance(response, schema):
+                    validated_response = response
+                else:
+                    # Validate inside the provider loop so malformed output
+                    # falls through to the next provider.
+                    validated_response = schema.model_validate(response)
+
                 logger.info(
                     "Structured LLM provider succeeded: %s",
                     provider_name,
                 )
 
-                return response
+                return validated_response
 
             except LLMConfigurationError as error:
                 logger.warning(
@@ -311,9 +323,9 @@ class LLMRouter:
                 classified_error = self._classify_error(error)
 
                 logger.warning(
-                    "Structured provider %s failed: %s",
+                    "Structured provider %s failed (%s)",
                     provider_name,
-                    classified_error,
+                    type(classified_error).__name__,
                 )
 
                 errors.append(

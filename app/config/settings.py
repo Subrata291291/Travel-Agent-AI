@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     groq_model: str = "openai/gpt-oss-20b"
     openrouter_model: str = "openrouter/free"
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     openai_model: str = "gpt-4o-mini"
 
     # =========================
