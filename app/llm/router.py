@@ -35,6 +35,7 @@ class LLMRouter:
             settings.fallback_llm_2,
             settings.fallback_llm_3,
         ]
+        logger.info("LLM provider fallback order: %s", " -> ".join(self.provider_order))
 
     def get_provider(self, provider_name: str):
 
@@ -56,7 +57,7 @@ class LLMRouter:
 
     def _classify_error(self, error: Exception) -> Exception:
 
-        status_code = getattr(error, "status_code", None)
+        status_code = self._status_code(error)
 
         if status_code == 401:
             return LLMAuthenticationError(str(error))
@@ -71,6 +72,24 @@ class LLMRouter:
             return LLMTemporaryError(str(error))
 
         return LLMProviderError(str(error))
+
+    @staticmethod
+    def _status_code(error: Exception) -> int | None:
+        """Read a numeric status without logging provider response contents."""
+        for source in (error, getattr(error, "response", None)):
+            if source is None:
+                continue
+            for attribute in ("status_code", "code"):
+                value = getattr(source, attribute, None)
+                if isinstance(value, int):
+                    return value
+        return None
+
+    @classmethod
+    def _safe_error_details(cls, error: Exception) -> str:
+        status_code = cls._status_code(error)
+        details = type(error).__name__
+        return f"{details}, status={status_code}" if status_code is not None else details
 
     def invoke(self, messages):
 
@@ -98,9 +117,8 @@ class LLMRouter:
             except LLMConfigurationError as error:
 
                 logger.warning(
-                    "Skipping %s: %s",
+                    "Skipping %s (provider is not configured)",
                     provider_name,
-                    error
                 )
 
                 errors.append(
@@ -114,9 +132,9 @@ class LLMRouter:
                 classified_error = self._classify_error(error)
 
                 logger.warning(
-                    "Provider %s failed: %s",
+                    "Provider %s failed (%s)",
                     provider_name,
-                    classified_error
+                    self._safe_error_details(error),
                 )
 
                 errors.append(
@@ -154,9 +172,8 @@ class LLMRouter:
             except LLMConfigurationError as error:
 
                 logger.warning(
-                    "Skipping %s: %s",
+                    "Skipping %s (provider is not configured)",
                     provider_name,
-                    error
                 )
 
                 errors.append(
@@ -168,9 +185,9 @@ class LLMRouter:
             except Exception as error:
 
                 logger.warning(
-                    "Provider %s failed: %s",
+                    "Provider %s failed (%s)",
                     provider_name,
-                    error
+                    self._safe_error_details(error),
                 )
 
                 errors.append(
@@ -219,9 +236,8 @@ class LLMRouter:
 
             except LLMConfigurationError as error:
                 logger.warning(
-                    "Skipping %s: %s",
+                    "Skipping %s (provider is not configured)",
                     provider_name,
-                    error,
                 )
 
                 errors.append(
@@ -234,9 +250,9 @@ class LLMRouter:
                 classified_error = self._classify_error(error)
 
                 logger.warning(
-                    "Tool-enabled provider %s failed: %s",
+                    "Tool-enabled provider %s failed (%s)",
                     provider_name,
-                    classified_error,
+                    self._safe_error_details(error),
                 )
 
                 errors.append(
@@ -308,9 +324,8 @@ class LLMRouter:
 
             except LLMConfigurationError as error:
                 logger.warning(
-                    "Skipping %s: %s",
+                    "Skipping %s (provider is not configured)",
                     provider_name,
-                    error,
                 )
 
                 errors.append(
@@ -325,7 +340,7 @@ class LLMRouter:
                 logger.warning(
                     "Structured provider %s failed (%s)",
                     provider_name,
-                    type(classified_error).__name__,
+                    self._safe_error_details(error),
                 )
 
                 errors.append(

@@ -99,6 +99,31 @@ def test_invalid_provider_output_falls_back_instead_of_reporting_success(monkeyp
     assert result.memories[0].source_quote == MESSAGE
 
 
+def test_fallback_uses_groq_openrouter_gemini_then_openai(monkeypatch, caplog):
+    class ProviderError(Exception):
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    attempted = []
+    router = LLMRouter()
+    router.provider_order = ["groq", "openrouter", "gemini", "openai"]
+    providers = {
+        "groq": FakeLLM(FakeStructured(error=ProviderError(400), on_invoke=lambda _p: attempted.append("groq"))),
+        "openrouter": FakeLLM(FakeStructured(error=ProviderError(429), on_invoke=lambda _p: attempted.append("openrouter"))),
+        "gemini": FakeLLM(FakeStructured(error=ProviderError(404), on_invoke=lambda _p: attempted.append("gemini"))),
+        "openai": FakeLLM(FakeStructured(output={"memories": [CANDIDATE]}, on_invoke=lambda _p: attempted.append("openai"))),
+    }
+    monkeypatch.setattr(router, "get_llm", lambda name: providers[name])
+
+    result = router.invoke_structured("Extract JSON.", MemoryExtraction)
+
+    assert attempted == ["groq", "openrouter", "gemini", "openai"]
+    assert result.memories[0].text == CANDIDATE["text"]
+    assert "status=400" in caplog.text
+    assert "status=429" in caplog.text
+    assert "status=404" in caplog.text
+
+
 def test_openai_quota_error_falls_back_without_logging_prompt(monkeypatch, caplog):
     class QuotaError(Exception):
         status_code = 429

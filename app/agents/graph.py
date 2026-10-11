@@ -365,6 +365,11 @@ class TravelAgentGraph:
         )
 
         graph.add_node(
+            "memory_recall",
+            self.memory_recall_node,
+        )
+
+        graph.add_node(
             "budget_conflict",
             self.budget_conflict_node,
         )
@@ -504,6 +509,7 @@ class TravelAgentGraph:
                 "flight_destination_clarification": "flight_destination_clarification",
                 "past_travel_date_clarification": "past_travel_date_clarification",
                 "acknowledgement": "acknowledgement",
+                "memory_recall": "memory_recall",
                 "hotel_recommendation": "hotel_recommendation",
                 "budget_conflict": "budget_conflict",
             },
@@ -522,6 +528,7 @@ class TravelAgentGraph:
         graph.add_edge("flight_destination_clarification", END)
         graph.add_edge("past_travel_date_clarification", END)
         graph.add_edge("acknowledgement", END)
+        graph.add_edge("memory_recall", END)
 
         # ----------------------------------------------------
         # DESTINATION ROUTING
@@ -1465,7 +1472,20 @@ class TravelAgentGraph:
             # Unknown option type
             return "new_booking"
 
+        if self._is_memory_recall_request(state.get("user_message", "")):
+            return "memory_recall"
+
         return "destination"
+
+    @staticmethod
+    def _is_memory_recall_request(message: str) -> bool:
+        return bool(re.search(
+            r"\b(?:what|which|show|list|tell me|do you remember)\b.{0,100}"
+            r"\b(?:preference|preferences|remember|saved|stored|memory|memories)\b|"
+            r"\bwhat do you remember about me\b",
+            message,
+            re.IGNORECASE,
+        ))
 
     @staticmethod
     def _has_past_travel_date(perception) -> bool:
@@ -1527,6 +1547,29 @@ class TravelAgentGraph:
             "messages": [AIMessage(content=message)],
             "pending_clarification": pending,
         }
+
+    def memory_recall_node(
+        self,
+        state: TravelState,
+        runtime: Runtime[GraphContext] | None = None,
+    ):
+        """Answer saved-preference questions only from this user's records."""
+        if runtime is None or runtime.context.db is None:
+            preferences = []
+        else:
+            preferences = self.memory.preferences.retrieve(
+                runtime.context.db,
+                state["user_id"],
+                state["tenant_id"],
+                state["user_message"],
+                limit=5,
+            )
+        saved = [memory.text for memory, _score in preferences]
+        if saved:
+            answer = "Your saved travel preferences: " + "; ".join(saved) + "."
+        else:
+            answer = "I don't have any saved travel preferences for your account yet."
+        return {"messages": [AIMessage(content=answer)], "answer": answer}
 
     def destination_selection_node(self, state: TravelState):
         """Resolve a numeric reply from the persisted candidate list."""

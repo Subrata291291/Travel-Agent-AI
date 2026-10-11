@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.database.models import Tenant, UserMemory
 from app.memory.long_term import LongTermMemory, MemoryCandidate, rank_memories
@@ -22,6 +23,33 @@ def test_persists_across_service_instances_and_isolates_tenant(test_db):
     assert LongTermMemory().list(test_db, "user-a", "tenant-a")[0].memory_id == saved.memory_id
     assert LongTermMemory().list(test_db, "user-b", "tenant-a") == []
     assert LongTermMemory().list(test_db, "user-a", "tenant-b") == []
+
+
+def test_memory_recall_query_retrieves_only_authenticated_owner_memories_in_new_session(test_db):
+    _owner(test_db, "tenant-a")
+    _owner(test_db, "tenant-b")
+    service = LongTermMemory()
+    service.upsert(test_db, "user-a", "tenant-a", _candidate("I prefer travelling by train"))
+    service.upsert(test_db, "user-b", "tenant-a", _candidate("I prefer aisle seats", "seating"))
+    service.upsert(test_db, "user-a", "tenant-b", _candidate("I prefer vegetarian meals", "diet"))
+
+    with Session(test_db.get_bind()) as verify_db:
+        own = service.retrieve(
+            verify_db, "user-a", "tenant-a",
+            "What travel preference have you saved for me?",
+        )
+        other_user = service.retrieve(
+            verify_db, "user-b", "tenant-a",
+            "What travel preference have you saved for me?",
+        )
+        other_tenant = service.retrieve(
+            verify_db, "user-a", "tenant-b",
+            "What travel preference have you saved for me?",
+        )
+
+    assert [memory.text for memory, _ in own] == ["I prefer travelling by train"]
+    assert [memory.text for memory, _ in other_user] == ["I prefer aisle seats"]
+    assert [memory.text for memory, _ in other_tenant] == ["I prefer vegetarian meals"]
 
 
 def test_update_supersedes_previous_and_delete_excludes_memory(test_db):

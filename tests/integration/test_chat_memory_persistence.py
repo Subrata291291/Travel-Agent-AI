@@ -32,7 +32,7 @@ class FakeEmbedder:
 
 class FakeExtractionRouter:
     def invoke_structured(self, prompt, schema):
-        assert "I prefer travelling by train. Please remember this preference for future trips." in prompt
+        assert "I prefer travelling by train." in prompt
         return {
             "memories": [{
                 "text": "Prefers travelling by train",
@@ -157,9 +157,18 @@ def test_extraction_failure_is_nonfatal_but_still_persists_chat(test_db, monkeyp
 
     app.dependency_overrides[get_db] = override_db
     try:
-        response = TestClient(app).post(
+        client = TestClient(app)
+        response = client.post(
             "/api/v1/chat",
             json={"message": "I prefer travelling by train.", "session_id": "failure-case"},
+            headers={"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"},
+        )
+        recall = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "What travel preference have you saved for me?",
+                "session_id": "failure-case",
+            },
             headers={"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"},
         )
     finally:
@@ -169,3 +178,90 @@ def test_extraction_failure_is_nonfatal_but_still_persists_chat(test_db, monkeyp
     assert test_db.scalar(select(UserMemory)) is None
     assert test_db.scalar(select(ConversationMessage)) is not None
     assert "Preference extraction unavailable (RuntimeError)" in caplog.text
+    assert recall.status_code == 200
+    assert "don't have any saved travel preferences" in recall.json()["answer"]
+
+
+def test_authenticated_chat_can_recall_saved_preference_on_followup(test_db, monkeypatch):
+    test_db.add(Tenant(tenant_id="tenant-a", name="Test", slug="tenant-a", status="active"))
+    test_db.add(User(
+        user_id="user-a", tenant_id="tenant-a", email="traveler@example.test",
+        name="Traveler", role="user", status="active",
+    ))
+    test_db.commit()
+
+    agent = TravelAgentGraph()
+    agent.memory.preferences = LongTermMemory(
+        FakeExtractionRouter(), MemoryVectorIndex(FakeEmbedder())
+    )
+
+    class FakePerception:
+        def understand(self, _message, _history):
+            return TripPerception(intent="other")
+
+    class FakePlanner:
+        def create_plan(self, _perception, _context):
+            return TravelPlan(goal="Acknowledge", tasks=[])
+
+    class FakeChatRouter:
+        def invoke_with_tools(self, _messages, _tools):
+            return AIMessage(content="Preference noted.")
+
+    agent.perception_agent = FakePerception()
+    agent.planner_agent = FakePlanner()
+    agent.router = FakeChatRouter()
+    monkeypatch.setattr(chat_module, "travel_agent_graph", agent)
+
+    app = FastAPI()
+    app.include_router(chat_module.router, prefix="/api/v1")
+
+    def override_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_db
+    headers = {"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"}
+    try:
+        client = TestClient(app)
+        first = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "I prefer travelling by train. Please remember this preference for all my future trips.",
+                "session_id": "memory-recall",
+            },
+            headers=headers,
+        )
+        assert first.status_code == 200, first.text
+
+        # The second turn uses authenticated identity and a fresh SQLAlchemy
+        # session to prove the preference was durably saved before retrieval.
+        with Session(test_db.get_bind()) as verify_db:
+            saved = verify_db.scalar(select(UserMemory).where(
+                UserMemory.user_id == "user-a",
+                UserMemory.tenant_id == "tenant-a",
+                UserMemory.status == "active",
+            ))
+            assert saved is not None
+            context = agent.memory.get_context(
+                "another-session", "tenant-a", "user-a",
+                query="What travel preference have you saved for me?",
+                db=verify_db,
+            )
+            assert context["user_preferences"] == [
+                {"text": "Prefers travelling by train", "topic": "transport"}
+            ]
+
+        second = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "What travel preference have you saved for me?",
+                "session_id": "memory-recall",
+            },
+            headers=headers,
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert second.status_code == 200, second.text
+    assert second.json()["answer"] == (
+        "Your saved travel preferences: Prefers travelling by train."
+    )

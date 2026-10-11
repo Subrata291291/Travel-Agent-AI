@@ -66,6 +66,12 @@ _PREFERENCE_CUES = re.compile(
     r"from now on|going forward|please remember|i don.t eat)\b", re.I,
 )
 _TEMPORARY_CUES = re.compile(r"\b(this trip|for this trip|on this trip|for tonight|this weekend|for tomorrow|for next week|for these dates)\b", re.I)
+_MEMORY_RECALL_CUES = re.compile(
+    r"\b(?:what|which|show|list|tell me|do you remember)\b.{0,100}"
+    r"\b(?:preference|preferences|remember|saved|stored|memory|memories)\b|"
+    r"\bwhat do you remember about me\b",
+    re.I,
+)
 
 
 def contains_sensitive_information(value: str) -> bool:
@@ -169,6 +175,10 @@ class LongTermMemory:
             UserMemory.status == "active"
         ).order_by(UserMemory.importance.desc(), UserMemory.updated_at.desc()).limit(500)).all()
         memories = list(active)
+        # A direct question about what is saved asks for the user's saved
+        # records, not a similarity match against words like "saved".
+        if _MEMORY_RECALL_CUES.search(query):
+            return [(memory, float(memory.importance)) for memory in memories[:max(0, limit)]]
         semantic_scores = self.vector_index.semantic_scores(db, user_id, tenant_id, query)
         return rank_memories(query, memories, limit, semantic_scores)
 
