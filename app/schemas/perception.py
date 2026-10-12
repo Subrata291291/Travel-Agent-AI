@@ -43,6 +43,11 @@ class TripPerception(BaseModel):
         description="Travel destination mentioned by the user.",
     )
 
+    original_destination: Optional[str] = Field(
+        default=None,
+        description="The user's destination wording before geographic normalization or resolution.",
+    )
+
     # ========================================================
     # TRAVEL DATES
     # ========================================================

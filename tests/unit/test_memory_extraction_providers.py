@@ -1,10 +1,13 @@
 import pytest
 from pydantic import ValidationError
+from langchain_core.exceptions import OutputParserException
+from types import SimpleNamespace
 
 from app.config.settings import settings
 from app.config.settings import Settings
 from app.database.models import Tenant, UserMemory, UserMemoryEmbedding
 from app.llm.router import LLMRouter
+from app.core.request_context import reset_request_id, set_request_id
 from app.memory.long_term import LongTermMemory, MemoryCandidate, MemoryExtraction
 from app.memory.vector_index import MemoryVectorIndex
 
@@ -119,9 +122,9 @@ def test_fallback_uses_groq_openrouter_gemini_then_openai(monkeypatch, caplog):
 
     assert attempted == ["groq", "openrouter", "gemini", "openai"]
     assert result.memories[0].text == CANDIDATE["text"]
-    assert "status=400" in caplog.text
-    assert "status=429" in caplog.text
-    assert "status=404" in caplog.text
+    assert "'status_code': 400" in caplog.text
+    assert "'status_code': 429" in caplog.text
+    assert "'status_code': 404" in caplog.text
 
 
 def test_openai_quota_error_falls_back_without_logging_prompt(monkeypatch, caplog):
@@ -140,6 +143,71 @@ def test_openai_quota_error_falls_back_without_logging_prompt(monkeypatch, caplo
     assert result.memories
     assert "insufficient_quota" not in caplog.text
     assert MESSAGE not in caplog.text
+
+
+def test_groq_429_logs_only_sanitized_structured_call_metadata(monkeypatch, caplog):
+    class RateLimitError(Exception):
+        status_code = 429
+        code = "rate_limit_exceeded"
+        llm_output = "PRIVATE_MODEL_OUTPUT"
+
+        def __init__(self):
+            self.response = SimpleNamespace(headers={
+                "retry-after": "2",
+                "x-ratelimit-remaining-requests": "0",
+                "authorization": "Bearer PRIVATE_AUTHORIZATION",
+                "x-request-id": "provider-request-123",
+            })
+
+    router = LLMRouter()
+    router.provider_order = ["groq", "openrouter"]
+    groq = FakeLLM(FakeStructured(error=RateLimitError()))
+    openrouter = FakeLLM(FakeStructured(output={"memories": [CANDIDATE]}))
+    monkeypatch.setattr(router, "get_llm", lambda name: {"groq": groq, "openrouter": openrouter}[name])
+    token = set_request_id("request-test-123")
+    try:
+        router.invoke_structured("PRIVATE_PROMPT_FOR_USER_ABC", MemoryExtraction)
+    finally:
+        reset_request_id(token)
+
+    assert "category=rate_limit" in caplog.text
+    assert "status_code': 429" in caplog.text
+    assert "retry-after': '2'" in caplog.text
+    assert f"'output_length': {len('PRIVATE_MODEL_OUTPUT')}" in caplog.text
+    assert "operation=MemoryExtraction" in caplog.text
+    assert "model=openai/gpt-oss-20b" in caplog.text
+    assert "provider-request-123" in caplog.text
+    assert "PRIVATE_PROMPT_FOR_USER_ABC" not in caplog.text
+    assert "PRIVATE_MODEL_OUTPUT" not in caplog.text
+    assert "PRIVATE_AUTHORIZATION" not in caplog.text
+    assert "authorization" not in caplog.text.casefold()
+    assert "request-test-123" in caplog.text
+
+
+def test_output_parser_exception_falls_back_to_next_provider(monkeypatch, caplog):
+    router = LLMRouter()
+    router.provider_order = ["openrouter", "gemini"]
+    attempted = []
+    invalid = FakeLLM(FakeStructured(
+        error=OutputParserException(
+            "private parse details", llm_output="PRIVATE_OPENROUTER_OUTPUT"
+        ),
+        on_invoke=lambda _prompt: attempted.append("openrouter"),
+    ))
+    valid = FakeLLM(FakeStructured(
+        output={"memories": [CANDIDATE]},
+        on_invoke=lambda _prompt: attempted.append("gemini"),
+    ))
+    monkeypatch.setattr(router, "get_llm", lambda name: {"openrouter": invalid, "gemini": valid}[name])
+
+    result = router.invoke_structured("PRIVATE_PROMPT", MemoryExtraction)
+
+    assert attempted == ["openrouter", "gemini"]
+    assert result.memories
+    assert "category=output_parse" in caplog.text
+    assert "PRIVATE_OPENROUTER_OUTPUT" not in caplog.text
+    assert "private parse details" not in caplog.text
+    assert "PRIVATE_PROMPT" not in caplog.text
 
 
 def test_gemini_model_is_configurable_and_passed_to_compatible_sdk(monkeypatch):

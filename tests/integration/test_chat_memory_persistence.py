@@ -18,6 +18,7 @@ from app.database.models import (
 )
 from app.memory.long_term import LongTermMemory
 from app.memory.vector_index import MemoryVectorIndex
+from app.llm.router import LLMRouter
 from app.schemas.perception import TripPerception
 from app.schemas.trip import TravelPlan
 
@@ -177,9 +178,89 @@ def test_extraction_failure_is_nonfatal_but_still_persists_chat(test_db, monkeyp
     assert response.status_code == 200
     assert test_db.scalar(select(UserMemory)) is None
     assert test_db.scalar(select(ConversationMessage)) is not None
-    assert "Preference extraction unavailable (RuntimeError)" in caplog.text
+    assert "Preference extraction unavailable" in caplog.text
+    assert "operation=MemoryExtraction" in caplog.text
     assert recall.status_code == 200
     assert "don't have any saved travel preferences" in recall.json()["answer"]
+
+
+def test_core_provider_exhaustion_returns_503_keeps_user_message_and_workflow_state(
+    test_db, monkeypatch, caplog
+):
+    test_db.add(Tenant(tenant_id="tenant-a", name="Test", slug="tenant-a", status="active"))
+    test_db.add(User(
+        user_id="user-a", tenant_id="tenant-a", email="traveler@example.test",
+        name="Traveler", role="user", status="active",
+    ))
+    test_db.commit()
+
+    agent = TravelAgentGraph()
+    router = LLMRouter()
+    router.provider_order = ["groq", "openrouter", "gemini", "openai"]
+
+    class ProviderRateLimit(Exception):
+        status_code = 429
+
+    class FailingStructured:
+        def invoke(self, _prompt):
+            raise ProviderRateLimit("PRIVATE_PROVIDER_ERROR")
+
+    class Provider:
+        def with_structured_output(self, _schema, method):
+            assert method == "json_mode"
+            return FailingStructured()
+
+    attempted = []
+    monkeypatch.setattr(router, "get_llm", lambda name: (attempted.append(name) or Provider()))
+    agent.perception_agent.understand = lambda *_args: router.invoke_structured(
+        "PRIVATE_CORE_PROMPT", TripPerception
+    )
+    monkeypatch.setattr(chat_module, "travel_agent_graph", agent)
+
+    session_id = "core-provider-failure"
+    original_workflow = {
+        "trip_context": {"destination": "Saved destination"},
+        "pending_clarification": "flight_return_date",
+    }
+    agent.memory.save_workflow_state(
+        session_id, "user-a", "tenant-a", original_workflow, db=test_db
+    )
+
+    app = FastAPI()
+    app.include_router(chat_module.router, prefix="/api/v1")
+
+    def override_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_db
+    message = "Find a flight for this trip. PRIVATE_USER_TEXT"
+    try:
+        response = TestClient(app).post(
+            "/api/v1/chat",
+            json={"message": message, "session_id": session_id},
+            headers={"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The travel assistant is temporarily unavailable. Please try again shortly."
+    }
+    assert response.headers.get("X-Request-ID")
+    assert attempted == ["groq", "openrouter", "gemini", "openai"]
+    assert agent.memory.get_workflow_state(
+        session_id, "tenant-a", "user-a", db=test_db
+    ) == original_workflow
+    saved_messages = agent.memory.get_messages(
+        session_id, "tenant-a", "user-a", db=test_db
+    )
+    assert [item["role"] for item in saved_messages] == ["human"]
+    assert saved_messages[0]["content"] == message
+    assert "PRIVATE_CORE_PROMPT" not in caplog.text
+    assert "PRIVATE_PROVIDER_ERROR" not in caplog.text
+    assert "PRIVATE_USER_TEXT" not in caplog.text
+    assert "tenant-a" not in caplog.text
 
 
 def test_authenticated_chat_can_recall_saved_preference_on_followup(test_db, monkeypatch):

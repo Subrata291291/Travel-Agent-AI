@@ -46,7 +46,11 @@ class AirportResolver:
                 continue
             candidates = [place]
             if place.get("type") == "city" and isinstance(place.get("airports"), list):
-                candidates = [item for item in place["airports"] if isinstance(item, dict)]
+                # A Duffel city place can itself have a usable city IATA code;
+                # keep it alongside its associated airport records.
+                candidates.extend(
+                    item for item in place["airports"] if isinstance(item, dict)
+                )
             for item in candidates:
                 code = item.get("iata_code")
                 if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z]{3}", code):
@@ -64,10 +68,45 @@ class AirportResolver:
                     "country_code": country,
                     "iata_code": code.upper(),
                     "duffel_place_id": item.get("id"),
+                    "place_type": (
+                        item.get("type")
+                        if item is place
+                        else "airport"
+                    ) or place.get("type"),
                 })
+                city = item.get("city") or place.get("city")
+                city_code = item.get("iata_city_code")
+                if not city_code and isinstance(city, dict):
+                    city_code = city.get("iata_code")
+                if (
+                    isinstance(city_code, str)
+                    and re.fullmatch(r"[A-Za-z]{3}", city_code)
+                    and city_code.upper() != code.upper()
+                ):
+                    city_name = (
+                        city.get("name") if isinstance(city, dict) else None
+                    ) or item.get("city_name") or place.get("city_name")
+                    city_id = city.get("id") if isinstance(city, dict) else None
+                    city_key = (city_code.upper(), str(city_name))
+                    if city_key not in seen:
+                        seen.add(city_key)
+                        records.append({
+                            "airport_name": city_name,
+                            "city": city_name,
+                            "country_code": country,
+                            "iata_code": city_code.upper(),
+                            "duffel_place_id": city_id,
+                            "place_type": "city",
+                        })
         return records
 
-    def lookup(self, query: str, *, field: str | None = None) -> dict[str, Any]:
+    def lookup(
+        self,
+        query: str,
+        *,
+        field: str | None = None,
+        origin_country_code: str | None = None,
+    ) -> dict[str, Any]:
         """Return resolved airport details, choices for ambiguity, or a safe error."""
         if not query or not query.strip():
             raise AirportLookupError("Please provide a city or airport.", field=field)
@@ -121,7 +160,11 @@ class AirportResolver:
                 field=field,
             )
 
-        normalized = self._normalize(original)
+        # Prefer a token-complete match. This lets "Delhi" match "New Delhi"
+        # while excluding lexical lookalikes such as Déline and Delingha.
+        place_query = original.split(",", maxsplit=1)[0].strip()
+        normalized = self._normalize(place_query)
+        query_tokens = set(normalized.split())
         exact = [
             item for item in all_records
             if normalized in {
@@ -130,8 +173,25 @@ class AirportResolver:
                 self._normalize(str(item.get("iata_code", ""))),
             }
         ]
-        if exact:
-            all_records = exact
+        exact_city = [
+            item for item in exact
+            if item.get("place_type") == "city"
+            and normalized in {
+                self._normalize(str(item.get("airport_name", ""))),
+                self._normalize(str(item.get("city", ""))),
+            }
+        ]
+        if exact_city:
+            exact = exact_city
+        lexical = exact or [
+            item for item in all_records
+            if query_tokens and any(
+                query_tokens.issubset(set(self._normalize(str(item.get(field_name, ""))).split()))
+                for field_name in ("airport_name", "city", "iata_code")
+            )
+        ]
+        if lexical:
+            all_records = lexical
         else:
             # Duffel's suggestions may include airports whose names merely
             # resemble the query (for example, Delhi, Canada). Resolve the
@@ -156,6 +216,19 @@ class AirportResolver:
                 ]
                 if local_records:
                     all_records = local_records
+
+        # An unqualified destination in the same itinerary is more likely to
+        # refer to the same country as the origin. Treat this only as a ranking
+        # signal: if no such Duffel candidates exist, retain the other matches
+        # and ask the user instead of silently forcing a country.
+        if origin_country_code and "," not in original:
+            same_country = [
+                item for item in all_records
+                if str(item.get("country_code") or "").casefold()
+                == origin_country_code.casefold()
+            ]
+            if same_country:
+                all_records = same_country
 
         unique = {item["iata_code"]: item for item in all_records}
         all_records = list(unique.values())

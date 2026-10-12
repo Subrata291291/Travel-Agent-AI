@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response
 import logging
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from uuid import uuid4
 
 from app.agents.graph import TravelAgentGraph
 from app.auth.dependencies import get_current_user
 from app.core.tenant_context import TenantContext
 from app.database.connection import describe_database_session, get_db
+from app.core.request_context import reset_request_id, set_request_id
+from app.llm.exceptions import StructuredLLMUnavailable
 
 
 router = APIRouter(
@@ -75,6 +78,7 @@ travel_agent_graph = TravelAgentGraph()
 )
 def chat(
     request: ChatRequest,
+    response: Response,
     context: TenantContext = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -97,13 +101,30 @@ def chat(
     """
 
     logger.info("Chat persistence database session: %s", describe_database_session(db))
-    result = travel_agent_graph.run(
-        user_message=request.message,
-        user_id=context.user_id,
-        session_id=request.session_id,
-        tenant_id=context.tenant_id,
-        db=db,
-    )
+    request_id = str(uuid4())
+    response.headers["X-Request-ID"] = request_id
+    request_token = set_request_id(request_id)
+    try:
+        result = travel_agent_graph.run(
+            user_message=request.message,
+            user_id=context.user_id,
+            session_id=request.session_id,
+            tenant_id=context.tenant_id,
+            db=db,
+        )
+    except StructuredLLMUnavailable as error:
+        logger.error(
+            "Chat core operation unavailable request_id=%s operation=%s category=provider_exhaustion",
+            request_id,
+            error.operation,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="The travel assistant is temporarily unavailable. Please try again shortly.",
+            headers={"X-Request-ID": request_id},
+        ) from None
+    finally:
+        reset_request_id(request_token)
 
     booking = result.get("booking")
 

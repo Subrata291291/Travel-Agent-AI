@@ -1,4 +1,5 @@
 import unicodedata
+import re
 
 from app.tools.geocoding import GeocodingTool
 
@@ -81,7 +82,29 @@ class DestinationResolver:
         location: str,
         country_code: str | None = None,
     ) -> dict:
-        query_parts = [part.strip() for part in location.split(",")]
+        # User messages and model summaries can contain trip phrasing or repeat
+        # the same comma-separated place. Keep the first geographic phrase and
+        # collapse duplicate fragments before calling the geocoder.
+        cleaned = re.sub(r"\s+", " ", location).strip(" ,.!?;:")
+        cleaned = re.sub(
+            r"\s+(?:during|for|on|while)\s+(?:my|our|this|the)\s+"
+            r"(?:trip|travel|vacation|holiday)\b.*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip(" ,.!?;:")
+        unique_parts = []
+        seen_parts = set()
+        for part in cleaned.split(","):
+            part = re.sub(r"\s+", " ", part).strip(" ,.!?;:")
+            key = self._normalize(part)
+            if part and key not in seen_parts:
+                seen_parts.add(key)
+                unique_parts.append(part)
+        cleaned = ", ".join(unique_parts)
+        query_parts = [part.strip() for part in cleaned.split(",")]
+        if not query_parts or not query_parts[0]:
+            return {"status": "not_found", "location": cleaned, "candidates": []}
         place_name = query_parts[0]
         qualifiers = [part for part in query_parts[1:] if part]
 
@@ -105,7 +128,7 @@ class DestinationResolver:
         if not candidates:
             return {
                 "status": "not_found",
-                "location": location,
+                "location": cleaned,
                 "candidates": [],
             }
 
@@ -118,7 +141,7 @@ class DestinationResolver:
         if not candidates:
             return {
                 "status": "not_found",
-                "location": location,
+                "location": cleaned,
                 "candidates": [],
             }
 
@@ -227,12 +250,12 @@ class DestinationResolver:
 
             return {
                 "status": "ambiguous",
-                "location": location,
+                "location": cleaned,
                 "candidates": exact_candidates,
             }
 
         return {
             "status": "ambiguous",
-            "location": location,
+            "location": cleaned,
             "candidates": candidates,
         }

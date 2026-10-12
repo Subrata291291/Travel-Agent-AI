@@ -48,11 +48,16 @@ class DuffelFlightProvider:
         """
 
         try:
-            origin = self.airports.resolve(origin, field="origin")
+            origin_record = self.airports.lookup(origin, field="origin")
+            origin = origin_record["iata_code"]
         except AirportLookupError as exc:
             raise ValueError(f"Origin airport: {exc}") from exc
         try:
-            destination = self.airports.resolve(destination, field="destination")
+            destination = self.airports.lookup(
+                destination,
+                field="destination",
+                origin_country_code=origin_record.get("country_code"),
+            )["iata_code"]
         except AirportLookupError as exc:
             raise ValueError(f"Destination airport: {exc}") from exc
 

@@ -62,6 +62,59 @@ def _strip_destination_option_label(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _clean_location_text(value: str | None) -> str | None:
+    """Remove common trip phrasing and repeated comma fragments from a place."""
+    if not value:
+        return value
+    value = re.sub(r"\s+", " ", value).strip(" ,.!?;:")
+    value = re.sub(
+        r"\s+(?:during|for|on|while)\s+(?:my|our|this|the)\s+"
+        r"(?:trip|travel|vacation|holiday)\b.*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip(" ,.!?;:")
+    parts = []
+    seen = set()
+    for part in value.split(","):
+        cleaned = part.strip(" ,.!?;:")
+        key = re.sub(r"\s+", " ", cleaned).casefold()
+        if cleaned and key not in seen:
+            seen.add(key)
+            parts.append(cleaned)
+    return ", ".join(parts) or None
+
+
+def _contextual_destination_reply(message: str, pending_destination: str | None) -> str | None:
+    """Use a location clarification in the user's words, never model history text."""
+    pending = _clean_location_text(pending_destination)
+    if not pending:
+        return None
+    reply = _clean_location_text(message)
+    if not reply:
+        return None
+    normalized_pending = re.sub(r"\s+", " ", pending).casefold()
+    normalized_reply = re.sub(r"\s+", " ", reply).casefold()
+    if normalized_reply == normalized_pending or normalized_reply.startswith(normalized_pending + ","):
+        return reply
+
+    # Accept concise geographic explanations such as "Goa is a state ... of India".
+    lead = re.match(
+        rf"^\s*{re.escape(pending)}\b\s+is\s+(?:an?\s+)?"
+        r"(?:state|union territory|province|region|country|city|town|district)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if lead:
+        contexts = list(re.finditer(r"\b(?:of|in)\s+(?:the\s+)?", message, re.IGNORECASE))
+        if contexts:
+            context = message[contexts[-1].end():].strip(" ,.!?;:")
+            context = re.sub(r"\s+", " ", context)
+            if context:
+                return _clean_location_text(f"{pending}, {context}")
+    return None
+
+
 def _has_destination_option_label(value: str | None) -> bool:
     return bool(value and _DESTINATION_OPTION_PREFIX.match(value))
 
@@ -841,6 +894,7 @@ class TravelAgentGraph:
         return {
             "intent": perception.intent,
             "destination": perception.destination,
+            "original_destination": perception.original_destination,
             "origin": perception.origin,
             "transport_destination": perception.transport_destination,
             "hotel_destination": perception.hotel_destination,
@@ -915,9 +969,35 @@ class TravelAgentGraph:
             message,
             re.IGNORECASE,
         ))
-        destination_correction = _extract_destination_correction(message)
+        pending_destination_reply = None
+        if state.get("pending_clarification") == "destination":
+            pending_destination_reply = _contextual_destination_reply(
+                message, state.get("pending_destination")
+            )
+            if (
+                pending_destination_reply is None
+                and state.get("pending_destination")
+                and len(message.split()) <= 4
+                and not re.search(
+                    r"\b(?:i|we|my|actually|change|want|go|travel|book|find|search|hotels?|flight|trip|plan)\b|\d",
+                    message,
+                    re.IGNORECASE,
+                )
+            ):
+                pending_destination_reply = _clean_location_text(
+                    f"{state['pending_destination']}, {message}"
+                )
+        destination_correction = (
+            pending_destination_reply
+            or _extract_destination_correction(message)
+        )
         if destination_correction:
             current.destination = destination_correction
+            current.original_destination = (
+                message.strip()
+                if pending_destination_reply
+                else destination_correction
+            )
             current.transport_destination = destination_correction
             if (state.get("trip_context") or {}).get("hotel_destination"):
                 current.hotel_destination = destination_correction
@@ -942,7 +1022,8 @@ class TravelAgentGraph:
         if route:
             current.origin = route.group(1).strip(" .,!?")
             if not destination_correction:
-                current.destination = route.group(2).strip(" .,!?")
+                current.destination = _clean_location_text(route.group(2).strip(" .,!?"))
+                current.original_destination = current.destination
                 current.transport_destination = current.destination
         explicit_origin = _extract_explicit_origin(message)
         if explicit_origin:
@@ -1010,12 +1091,32 @@ class TravelAgentGraph:
             if return_date:
                 current.end_date = return_date
         hotel_place = re.search(
-            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where)\b|[,.;!?]|$)",
+            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where|during|while)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
         if hotel_place and not destination_correction:
-            current.hotel_destination = hotel_place.group(1).strip(" .,!?")
+            current.hotel_destination = _clean_location_text(hotel_place.group(1))
             current.destination = current.hotel_destination
+            current.original_destination = current.hotel_destination
+
+        if (
+            not current.original_destination
+            and not route
+            and not destination_correction
+            and not hotel_place
+            and len(message.split()) <= 4
+            and not re.search(
+                r"\b(?:i|we|my|actually|change|want|go|travel|book|find|search|hotels?|flight|trip|plan)\b|\d",
+                message,
+                re.IGNORECASE,
+            )
+        ):
+            # A concise place reply is more reliable than a model-generated
+            # destination that may contain old conversation fragments.
+            current.destination = _clean_location_text(message)
+            current.original_destination = current.destination
+            if current.hotel_destination:
+                current.hotel_destination = current.destination
         traveller_match = re.search(
             r"\b(\d+)\s+(?:people|persons?|passengers?|travellers?|travelers?)\b",
             message, re.IGNORECASE,
@@ -1155,6 +1256,8 @@ class TravelAgentGraph:
             current.hotel_destination = previous.get("hotel_destination")
         elif destination_correction:
             current.hotel_destination = current.destination
+        if not current.original_destination:
+            current.original_destination = previous.get("original_destination") or previous.get("destination")
         if current.room_quantity is None:
             current.room_quantity = previous.get("room_quantity")
 
@@ -1496,7 +1599,10 @@ class TravelAgentGraph:
                     "clarification_needed": False,
                 }
         else:
-            destination = perception.destination if perception else None
+            destination = (
+                perception.destination or perception.original_destination
+                if perception else None
+            )
 
         pending_clarification = state.get("pending_clarification")
         pending_destination = state.get("pending_destination")
@@ -1542,13 +1648,8 @@ class TravelAgentGraph:
             and not re.search(r"\bhotels?\s+(?:in|at)\s+", state.get("user_message", ""), re.IGNORECASE)
         ):
 
-            normalized_destination = (
-                destination.strip().lower()
-            )
-
-            normalized_pending = (
-                pending_destination.strip().lower()
-            )
+            normalized_destination = re.sub(r"\s+", " ", destination.strip()).casefold()
+            normalized_pending = re.sub(r"\s+", " ", pending_destination.strip()).casefold()
 
             if (
                 normalized_destination
@@ -1579,6 +1680,8 @@ class TravelAgentGraph:
                 } if explicit_destination_correction else {}),
             }
 
+        destination = _clean_location_text(destination) or destination
+
         # ----------------------------------------------------
         # Resolve destination
         # ----------------------------------------------------
@@ -1596,7 +1699,9 @@ class TravelAgentGraph:
             return {
                 "destination_resolution": result,
                 "clarification_needed": False,
-                "pending_clarification": pending_clarification,
+                "pending_clarification": _pending_after_destination_correction(
+                    pending_clarification
+                ),
                 "pending_destination": None,
                 "pending_destination_candidates": [],
                 "tool_context": None,
@@ -1949,6 +2054,10 @@ class TravelAgentGraph:
             canonical_destination = _strip_destination_option_label(
                 canonical_destination
             ) or canonical_destination
+            if not perception.original_destination:
+                perception.original_destination = (
+                    state.get("pending_destination") or perception.destination
+                )
             perception.destination = canonical_destination
             if perception.transport_destination:
                 perception.transport_destination = canonical_destination

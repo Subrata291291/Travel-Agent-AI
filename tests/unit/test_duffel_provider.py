@@ -54,6 +54,7 @@ def test_howrah_resolves_through_duffel_kolkata_airport_data():
         "country_code": "IN",
         "iata_code": "CCU",
         "duffel_place_id": "arp_ccu_in",
+        "place_type": "airport",
     }
     assert client.get_calls[1][1] == {
         "lat": "22.5958", "lng": "88.2636", "rad": "60000"
@@ -104,6 +105,33 @@ def test_airport_resolver_uses_exact_city_code_for_multi_airport_city():
     ]
 
 
+def test_duffel_city_place_code_is_preferred_over_its_airport_list():
+    place = {
+            "type": "city", "name": "London", "iata_code": "LON",
+            "iata_country_code": "GB", "airports": [
+                {"id": "arp_lhr_gb", "name": "Heathrow", "iata_code": "LHR",
+                 "iata_country_code": "GB", "city_name": "London"},
+                {"id": "arp_lgw_gb", "name": "Gatwick", "iata_code": "LGW",
+                 "iata_country_code": "GB", "city_name": "London"},
+            ],
+        }
+    client = FakeDuffelClient(places={"London": [place], "Heathrow": [place]})
+
+    assert AirportResolver(client).resolve("London") == "LON"
+    assert AirportResolver(client).resolve("Heathrow") == "LHR"
+
+
+def test_duffel_airport_place_exposes_city_iata_code_for_city_search():
+    client = FakeDuffelClient(places={"London": [{
+        "type": "airport", "id": "arp_lhr_gb", "name": "Heathrow",
+        "iata_code": "LHR", "iata_city_code": "LON", "city_name": "London",
+        "iata_country_code": "GB",
+        "city": {"id": "cit_lon_gb", "name": "London", "iata_code": "LON"},
+    }]})
+
+    assert AirportResolver(client).resolve("London") == "LON"
+
+
 def test_airport_resolver_requires_clarification_for_ambiguous_airports():
     client = FakeDuffelClient(
         places={
@@ -137,6 +165,43 @@ def test_delhi_destination_prefers_geographically_relevant_duffel_candidate(quer
     resolver = AirportResolver(client, geocoding=IndiaGeocoder())
     result = resolver.lookup(query, field="destination")
     assert result["iata_code"] == "DEL"
+
+
+def test_delhi_token_match_excludes_distant_lexical_lookalikes_without_geocoder():
+    client = FakeDuffelClient(places={"Delhi": [
+        {"type": "airport", "name": "Indira Gandhi International Airport",
+         "city_name": "New Delhi", "iata_country_code": "IN", "iata_code": "DEL"},
+        {"type": "airport", "name": "Déline Airport", "city_name": "Déline",
+         "iata_country_code": "CA", "iata_code": "YWJ"},
+        {"type": "airport", "name": "Delingha Airport", "city_name": "Delingha",
+         "iata_country_code": "CN", "iata_code": "HXD"},
+    ]})
+
+    class OfflineGeocoder:
+        def search(self, _query):
+            raise AssertionError("lexically irrelevant candidates should be excluded first")
+
+    assert AirportResolver(client, geocoding=OfflineGeocoder()).resolve("Delhi") == "DEL"
+
+
+def test_duffel_flight_search_uses_origin_country_as_destination_relevance_signal():
+    client = FakeDuffelClient(places={
+        "Kolkata": [{"type": "city", "name": "Kolkata", "iata_code": "CCU",
+                     "city_name": "Kolkata", "iata_country_code": "IN"}],
+        "Delhi": [
+            {"type": "airport", "name": "Indira Gandhi International Airport",
+             "city_name": "New Delhi", "iata_country_code": "IN", "iata_code": "DEL"},
+            {"type": "airport", "name": "Déline Airport", "city_name": "Déline",
+             "iata_country_code": "CA", "iata_code": "YWJ"},
+        ],
+    })
+
+    DuffelFlightProvider(client).search_flights(
+        origin="Kolkata", destination="Delhi", departure_date="2027-02-20"
+    )
+
+    assert client.post_calls[0][1]["data"]["slices"][0]["origin"] == "CCU"
+    assert client.post_calls[0][1]["data"]["slices"][0]["destination"] == "DEL"
 
 
 @pytest.mark.parametrize("answer", ["DEL", "Indira Gandhi International Airport"])

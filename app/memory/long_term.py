@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database.models import UserMemory
 from app.memory.vector_index import MemoryVectorIndex
+from app.core.request_context import get_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +262,19 @@ class LongTermMemory:
             result = self.llm_router.invoke_structured(prompt, MemoryExtraction)
             parsed = result if isinstance(result, MemoryExtraction) else MemoryExtraction.model_validate(result)
         except Exception as error:
-            logger.warning("Preference extraction unavailable (%s)", type(error).__name__)
+            error_name = type(error).__name__
+            category = (
+                "provider_exhaustion"
+                if error_name == "StructuredLLMUnavailable"
+                else "schema_validation"
+                if error_name == "ValidationError"
+                else "provider_error"
+            )
+            logger.warning(
+                "Preference extraction unavailable request_id=%s operation=MemoryExtraction category=%s",
+                get_request_id() or "unavailable",
+                category,
+            )
             return 0
         stored = 0
         for candidate in parsed.memories:
@@ -280,5 +293,15 @@ class LongTermMemory:
                 continue
             except Exception as error:
                 db.rollback()
-                logger.warning("Preference persistence failed (%s)", type(error).__name__)
+                error_name = type(error).__name__
+                category = (
+                    error_name
+                    if error_name in {"IntegrityError", "OperationalError"}
+                    else "persistence_error"
+                )
+                logger.warning(
+                    "Preference persistence failed request_id=%s category=%s",
+                    get_request_id() or "unavailable",
+                    category,
+                )
         return stored

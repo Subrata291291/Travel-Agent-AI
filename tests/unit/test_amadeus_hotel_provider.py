@@ -24,6 +24,8 @@ def test_amadeus_search_preserves_supplier_offer_and_price(monkeypatch):
             assert request.headers["Authorization"] == "Bearer test-token"
             assert request.url.params["checkInDate"] == (today + timedelta(days=30)).isoformat()
             assert request.url.params["roomQuantity"] == "2"
+            assert request.url.params["adults"] == "4"
+            assert request.url.params["currency"] == "EUR"
             return httpx.Response(200, json={"data": [{"hotel": {"hotelId": "HLPAR1", "name": "Test Hotel"},
                 "offers": [{"id": "OFFER-77", "price": {"total": "300", "currency": "EUR"},
                             "room": {"typeEstimated": {"category": "STANDARD"}}, "boardType": "BREAKFAST"}]}]})
@@ -34,7 +36,7 @@ def test_amadeus_search_preserves_supplier_offer_and_price(monkeypatch):
         transport=httpx.MockTransport(respond), sleep=lambda _delay: None,
     ))
     options = provider.search_hotels("PAR", (today + timedelta(days=30)).isoformat(),
-                                     (today + timedelta(days=32)).isoformat(), currency="EUR",
+                                     (today + timedelta(days=32)).isoformat(), travellers=4, currency="EUR",
                                      resolved_destination={"latitude": 48.8, "longitude": 2.3},
                                      room_quantity=2)
     assert len(options) == 1
@@ -43,6 +45,34 @@ def test_amadeus_search_preserves_supplier_offer_and_price(monkeypatch):
     assert options[0].total_price == 300
     assert options[0].price_per_night == 150
     assert options[0].provider_details["room_type"] == "STANDARD"
+
+
+def test_missing_amadeus_credentials_return_tool_error_not_fake_success(monkeypatch):
+    from app.agents.executor import ToolExecutor
+    from app.config import settings as settings_module
+    from app.tools.hotels import _hotel_provider
+
+    monkeypatch.setattr(settings_module.settings, "amadeus_client_id", "")
+    monkeypatch.setattr(settings_module.settings, "amadeus_client_secret", "")
+    _hotel_provider.cache_clear()
+    try:
+        result = ToolExecutor().execute({
+            "name": "search_hotels",
+            "id": "hotel-search-test",
+            "args": {
+                "destination": "Goa, India",
+                "check_in_date": (date.today() + timedelta(days=30)).isoformat(),
+                "check_out_date": (date.today() + timedelta(days=32)).isoformat(),
+                "travellers": 2,
+                "room_quantity": 2,
+                "resolved_destination": {"latitude": 15.3, "longitude": 74.1},
+            },
+        })
+    finally:
+        _hotel_provider.cache_clear()
+
+    assert result.content.startswith("TOOL_ERROR:")
+    assert "not configured" in result.content
 
 
 def test_amadeus_is_disabled_without_credentials(monkeypatch):
