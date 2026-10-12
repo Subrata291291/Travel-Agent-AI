@@ -157,7 +157,29 @@ def _extract_explicit_origin(message: str) -> str | None:
             message,
             re.IGNORECASE,
         )
-    return match.group(1).strip(" ,.!?;") if match else None
+    if not match:
+        return None
+    origin = match.group(1).strip(" ,.!?;")
+    return None if is_non_location_value(origin) else origin
+
+
+def _extract_transport_destination(message: str) -> str | None:
+    """Extract a destination explicitly attached to a transport search."""
+    match = re.search(
+        r"\b(?:search|find|look\s+for|show|compare)\s+"
+        r"(?:(?:me)\s+)?(?:a\s+)?"
+        r"(?:train|trains|rail|flight|flights|bus|buses|transport)"
+        r"(?:\s+(?:options?|tickets?))?\s+(?:to|for)\s+(.+?)"
+        r"(?=\s+(?:on|from|with|for|and|during|returning)\b|"
+        r"\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|"
+        r"june|july|august|september|october|november|december)\b|[.!?]|$)",
+        message,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    destination = _clean_location_text(match.group(1))
+    return None if is_non_location_value(destination) else destination
 
 
 def _extract_contextual_return_date(message: str, start_date: str | None) -> str | None:
@@ -1024,6 +1046,12 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
+        transport_search_request = bool(re.search(
+            r"\b(?:search|find|look\s+for|show|compare)\b.*\b"
+            r"(?:train|trains|rail|flight|flights|bus|buses|transport)\b",
+            message,
+            re.IGNORECASE,
+        ))
         bare_transport_search = re.fullmatch(
             r"\s*(?:please\s+)?(?:search|find|look\s+for|show|compare)\s+"
             r"(?:(?:for|me)\s+)?(?:a\s+)?"
@@ -1056,6 +1084,61 @@ class TravelAgentGraph:
             current.room_quantity = None
             current.budget = None
             current.preferences = []
+        elif transport_search_request:
+            current.intent = "find_transport"
+            current.origin = None
+            current.hotel_destination = None
+            has_explicit_date = bool(re.search(
+                r"\b(?:\d{4}-\d{1,2}-\d{1,2}|"
+                r"\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?"
+                r"(?:january|february|march|april|may|june|july|august|"
+                r"september|october|november|december)|"
+                r"(?:january|february|march|april|may|june|july|august|"
+                r"september|october|november|december)\s+\d{1,2})\b",
+                message,
+                re.IGNORECASE,
+            ))
+            if not has_explicit_date:
+                current.start_date = None
+                current.end_date = None
+                current.duration_days = None
+                current.round_trip = bool(re.search(
+                    r"\b(?:round[ -]?trip|return\s+(?:flight|ticket|journey)|there\s+and\s+back)\b",
+                    message,
+                    re.IGNORECASE,
+                ))
+            if not re.search(
+                r"\b\d+\s+(?:people|persons?|passengers?|travellers?|travelers?|adults?)\b",
+                message,
+                re.IGNORECASE,
+            ):
+                current.travellers = 1
+            if not re.search(r"\b\d+\s+rooms?\b", message, re.IGNORECASE):
+                current.room_quantity = None
+            if not re.search(
+                r"\b(?:budget|under|less\s+than|up\s+to|maximum|spend)\b|₹|\bINR\b|\bUSD\b|\$",
+                message,
+                re.IGNORECASE,
+            ):
+                current.budget = None
+                current.currency = "INR"
+            mode_matches = re.findall(
+                r"\b(train|trains|rail|flight|flights|bus|buses)\b",
+                message,
+                re.IGNORECASE,
+            )
+            modes = {
+                "train" if mode.casefold() in {"train", "trains", "rail"}
+                else "flight" if mode.casefold() in {"flight", "flights"}
+                else "bus"
+                for mode in mode_matches
+            }
+            if len(modes) > 1:
+                current.transport_mode = "any"
+            elif modes:
+                current.transport_mode = next(iter(modes))
+            else:
+                current.transport_mode = "any"
         trip_context = state.get("trip_context") or {}
         parsed_date_range = extract_date_range(
             message,
@@ -1082,7 +1165,7 @@ class TravelAgentGraph:
             current.transport_destination = None
             current.hotel_destination = None
 
-        is_new_trip = bool(bare_transport_search) or bool(re.search(
+        is_new_trip = transport_search_request or bool(bare_transport_search) or bool(re.search(
             r"\b(?:new|another|different)\s+trip\b",
             message,
             re.IGNORECASE,
@@ -1123,12 +1206,12 @@ class TravelAgentGraph:
             if (state.get("trip_context") or {}).get("hotel_destination"):
                 current.hotel_destination = destination_correction
         route = re.search(
-            r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
+            r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[.!?]|$)",
             message, re.IGNORECASE,
         )
         if not route:
             route = re.search(
-                r"^\s*(.+?)\s*(?:→|->)\s*(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
+                r"^\s*(.+?)\s*(?:→|->)\s*(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[.!?]|$)",
                 message, re.IGNORECASE,
             )
         if (
@@ -1137,7 +1220,7 @@ class TravelAgentGraph:
             and not re.search(r"\b(?:from|plan|trip|find|book|flight|travel|destination|change|actually)\b", message, re.IGNORECASE)
         ):
             route = re.search(
-                r"^\s*(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
+                r"^\s*(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[.!?]|$)",
                 message, re.IGNORECASE,
             )
         if route and (
@@ -1145,12 +1228,27 @@ class TravelAgentGraph:
             or is_non_location_value(route.group(2))
         ):
             route = None
+        explicit_transport_destination = (
+            _extract_transport_destination(message)
+            if transport_search_request
+            else None
+        )
         if route:
             current.origin = route.group(1).strip(" .,!?")
             if not destination_correction:
                 current.destination = _clean_location_text(route.group(2).strip(" .,!?"))
                 current.original_destination = current.destination
                 current.transport_destination = current.destination
+        elif explicit_transport_destination:
+            current.destination = explicit_transport_destination
+            current.original_destination = explicit_transport_destination
+            current.transport_destination = explicit_transport_destination
+        elif transport_search_request:
+            # A new search without a place must ask for one rather than reuse
+            # a destination copied from older conversation history.
+            current.destination = None
+            current.original_destination = None
+            current.transport_destination = None
         explicit_origin = _extract_explicit_origin(message)
         if explicit_origin:
             current.origin = explicit_origin
@@ -1217,7 +1315,7 @@ class TravelAgentGraph:
             if return_date:
                 current.end_date = return_date
         hotel_place = re.search(
-            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where|during|while|from|check[- ]?in|check[- ]?out)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
+            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where|during|while|from|check[- ]?in|check[- ]?out)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[.!?]|$)",
             message, re.IGNORECASE,
         )
         if hotel_place and not destination_correction:

@@ -93,6 +93,19 @@ class DestinationResolver:
             cleaned,
             flags=re.IGNORECASE,
         ).strip(" ,.!?;:")
+        # Descriptions such as "Delhi, the capital of India" contain one
+        # place plus a geographic qualifier, not two place-name fragments.
+        capital_description = re.fullmatch(
+            r"(.+?),\s*(?:the\s+)?capital(?:\s+city)?\s+of\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if capital_description:
+            place, country = (
+                part.strip(" ,.!?;:")
+                for part in capital_description.groups()
+            )
+            cleaned = f"{place}, {country}"
         unique_parts = []
         seen_parts = set()
         for part in cleaned.split(","):
@@ -241,7 +254,13 @@ class DestinationResolver:
 
             best_rank = self._feature_rank(exact_candidates[0])
             next_rank = self._feature_rank(exact_candidates[1])
-            if best_rank > next_rank:
+            best_population = exact_candidates[0].get("population") or 0
+            next_population = exact_candidates[1].get("population") or 0
+            population_is_decisive = (
+                best_population >= 1_000_000
+                and best_population >= max(next_population * 10, 100_000)
+            )
+            if best_rank > next_rank or population_is_decisive:
                 return {
                     "status": "resolved",
                     "location": exact_candidates[0],
