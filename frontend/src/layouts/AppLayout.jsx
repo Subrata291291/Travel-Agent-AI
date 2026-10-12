@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getUserDisplayName, getUserInitial } from "../utils/userDisplay";
@@ -5,6 +6,23 @@ import TravelAgentLogo from "../components/TravelAgentLogo";
 
 function AppLayout() {
   const { user, logout } = useAuth();
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("travel_agent_theme") === "dark" ? "dark" : "light";
+    } catch {
+      return "light";
+    }
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.style.colorScheme = theme;
+    try {
+      localStorage.setItem("travel_agent_theme", theme);
+    } catch {
+      // The theme remains active for this page even when storage is unavailable.
+    }
+  }, [theme]);
 
   const navItems = [
     {
@@ -52,6 +70,17 @@ function AppLayout() {
 
           {/* Right side */}
           <div className="flex items-center gap-3">
+
+            <button
+              type="button"
+              onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+              <span className="ml-2 hidden sm:inline">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+            </button>
 
             {/* User */}
             <div className="flex items-center gap-3 border-l border-slate-200 pl-3">
