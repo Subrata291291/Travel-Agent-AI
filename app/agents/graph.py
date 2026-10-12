@@ -34,6 +34,7 @@ from app.tools.destination_resolver import DestinationResolver
 
 from app.schemas.tool import ToolContext
 from app.schemas.booking import BookingRequest
+from app.schemas.perception import TripPerception
 from app.schemas.trip import TravelPlan, TravelTask
 
 from app.services.booking_service import BookingService
@@ -431,15 +432,56 @@ class TravelAgentGraph:
 
         candidates = state.get("pending_destination_candidates") or []
         selection = str(state.get("user_message", "")).strip()
-        if not selection.isdigit():
-            return None
+        numbered = re.match(
+            r"^\s*(?:option\s*)?#?\s*(\d+)(?:\s*[:.)\-–—]\s*(.*?))?\s*$",
+            selection,
+            re.IGNORECASE,
+        )
+        if numbered:
+            index = int(numbered.group(1)) - 1
+            if not 0 <= index < len(candidates):
+                return None
+            candidate = candidates[index]
+            suffix = (numbered.group(2) or "").strip()
+            if suffix and not TravelAgentGraph._candidate_label_matches(
+                candidate, suffix
+            ):
+                return None
+            return candidate if isinstance(candidate, dict) else None
 
-        index = int(selection) - 1
-        if not 0 <= index < len(candidates):
-            return None
+        if len(candidates) == 1 and re.fullmatch(
+            r"\s*(?:yes|yes,?\s*use\s+it|that one|the first one)[.!]?\s*",
+            selection,
+            re.IGNORECASE,
+        ):
+            return candidates[0] if isinstance(candidates[0], dict) else None
 
-        candidate = candidates[index]
-        return candidate if isinstance(candidate, dict) else None
+        matching = [
+            candidate for candidate in candidates
+            if isinstance(candidate, dict)
+            and TravelAgentGraph._candidate_label_matches(candidate, selection)
+        ]
+        return matching[0] if len(matching) == 1 else None
+
+    @staticmethod
+    def _candidate_label_matches(candidate: dict, value: str) -> bool:
+        """Compare a clarification reply with a label built from stored data."""
+        labels = [
+            ", ".join(
+                str(part).strip()
+                for part in (
+                    candidate.get("name"),
+                    candidate.get("admin1"),
+                    candidate.get("country"),
+                )
+                if part
+            ),
+            str(candidate.get("name") or ""),
+        ]
+        normalize = lambda text: re.sub(
+            r"[^\w]+", " ", text.casefold(), flags=re.UNICODE
+        ).strip()
+        return normalize(value) in {normalize(label) for label in labels if label}
 
     def __init__(self):
 
@@ -943,6 +985,20 @@ class TravelAgentGraph:
             transport = train
         """
 
+        if self._selected_destination_candidate(state) is not None:
+            # Candidate selection is a deterministic state transition. Reuse
+            # the persisted trip slots instead of asking the LLM to reinterpret
+            # an option label as a new place or search request.
+            trip_context = state.get("trip_context") or {}
+            try:
+                perception = TripPerception.model_validate({
+                    "intent": trip_context.get("intent") or "plan_trip",
+                    **trip_context,
+                })
+            except (TypeError, ValueError):
+                perception = TripPerception(intent="plan_trip")
+            return {"perception": perception}
+
         # --------------------------------------------------------
         # 1. Get conversation history
         # --------------------------------------------------------
@@ -968,6 +1024,38 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
+        bare_transport_search = re.fullmatch(
+            r"\s*(?:please\s+)?(?:search|find|look\s+for|show|compare)\s+"
+            r"(?:(?:for|me)\s+)?(?:a\s+)?"
+            r"(train|trains|rail|flight|flights|bus|buses|transport)"
+            r"(?:\s+options?)?[.!?]*\s*",
+            message,
+            re.IGNORECASE,
+        )
+        if bare_transport_search:
+            mode = bare_transport_search.group(1).casefold()
+            current.intent = "find_transport"
+            current.transport_mode = (
+                "train" if mode in {"train", "trains", "rail"}
+                else "flight" if mode in {"flight", "flights"}
+                else "bus" if mode in {"bus", "buses"}
+                else "any"
+            )
+            # A bare search command starts a new task. Ignore any location the
+            # model may have copied from prior conversation history.
+            current.destination = None
+            current.original_destination = None
+            current.transport_destination = None
+            current.hotel_destination = None
+            current.origin = None
+            current.start_date = None
+            current.end_date = None
+            current.duration_days = None
+            current.round_trip = False
+            current.travellers = 1
+            current.room_quantity = None
+            current.budget = None
+            current.preferences = []
         trip_context = state.get("trip_context") or {}
         parsed_date_range = extract_date_range(
             message,
@@ -994,7 +1082,7 @@ class TravelAgentGraph:
             current.transport_destination = None
             current.hotel_destination = None
 
-        is_new_trip = bool(re.search(
+        is_new_trip = bool(bare_transport_search) or bool(re.search(
             r"\b(?:new|another|different)\s+trip\b",
             message,
             re.IGNORECASE,
@@ -1476,6 +1564,41 @@ class TravelAgentGraph:
 
         perception = state.get("perception")
         if perception:
+            if (
+                getattr(perception, "intent", None) == "find_transport"
+                and getattr(perception, "transport_mode", None) == "train"
+            ):
+                required_train_details = (
+                    ("origin", getattr(perception, "origin", None), "Where will you be travelling from?"),
+                    (
+                        "destination",
+                        getattr(perception, "transport_destination", None)
+                        or getattr(perception, "destination", None),
+                        "Where would you like to travel to?",
+                    ),
+                    ("travel_date", getattr(perception, "start_date", None), "What date would you like to travel?"),
+                )
+                missing = next(
+                    (item for item in required_train_details if not item[1]),
+                    None,
+                )
+                if missing:
+                    pending, _value, question = missing
+                    return {
+                        "plan": TravelPlan(
+                            goal="Collect the required train-search details.",
+                            needs_clarification=True,
+                            clarification_questions=[question],
+                            tasks=[TravelTask(
+                                task_id=f"clarify-{pending}",
+                                task_type="clarify",
+                                description=question,
+                            )],
+                        ),
+                        "clarification_needed": True,
+                        "pending_clarification": pending,
+                    }
+
             destinations = (
                 getattr(perception, "transport_destination", None),
                 getattr(perception, "hotel_destination", None),
@@ -1658,6 +1781,12 @@ class TravelAgentGraph:
             "clarification_needed": clarification_needed,
         }
         if not clarification_needed and state.get("pending_clarification") == "trip_details":
+            result["pending_clarification"] = None
+        elif (
+            not clarification_needed
+            and state.get("pending_clarification")
+            in {"origin", "destination", "travel_date"}
+        ):
             result["pending_clarification"] = None
         return result
 
@@ -1844,6 +1973,9 @@ class TravelAgentGraph:
 
         perception = state.get("perception")
 
+        if self._selected_destination_candidate(state) is not None:
+            return "destination_selection"
+
         acknowledgement = state.get("user_message", "").strip()
         if (
             perception
@@ -1857,9 +1989,6 @@ class TravelAgentGraph:
             and not state.get("pending_cancellation_booking_id")
         ):
             return "acknowledgement"
-
-        if self._selected_destination_candidate(state) is not None:
-            return "destination_selection"
 
         # ----------------------------------------------------------
         # Handle pending cancellation confirmation.
@@ -2137,7 +2266,7 @@ class TravelAgentGraph:
         return {"messages": [AIMessage(content=answer)], "answer": answer}
 
     def destination_selection_node(self, state: TravelState):
-        """Resolve a numeric reply from the persisted candidate list."""
+        """Resolve a reply against the persisted destination candidate list."""
 
         candidate = self._selected_destination_candidate(state)
         if candidate is None:
@@ -2156,14 +2285,19 @@ class TravelAgentGraph:
             canonical_destination = _strip_destination_option_label(
                 canonical_destination
             ) or canonical_destination
-            if not perception.original_destination:
-                perception.original_destination = (
-                    state.get("pending_destination") or perception.destination
-                )
+            perception.original_destination = (
+                state.get("pending_destination")
+                or perception.original_destination
+                or perception.destination
+            )
             perception.destination = canonical_destination
-            if perception.transport_destination:
+            if (
+                perception.transport_mode in {"flight", "train", "bus", "any"}
+                or perception.intent == "find_transport"
+            ):
                 perception.transport_destination = canonical_destination
-            perception.hotel_destination = canonical_destination
+            if perception.intent in {"find_hotel", "recommend_hotel"}:
+                perception.hotel_destination = canonical_destination
 
         print(
             "[DestinationSelection] Selected candidate: "
@@ -2539,7 +2673,15 @@ class TravelAgentGraph:
         # Build clarification message
         # ----------------------------------------------------
 
-        if options:
+        if len(options) == 1:
+
+            question = (
+                "I found one matching place for "
+                f"'{destination_label}': {options[0]}. "
+                "Should I use this destination? Reply yes or provide another place."
+            )
+
+        elif options:
 
             question = (
                 "I found multiple places "
@@ -2608,7 +2750,8 @@ class TravelAgentGraph:
                 )
             )
         )
-        if missing_destination:
+        pending = state.get("pending_clarification") or "trip_details"
+        if missing_destination and pending in _DESTINATION_CLARIFICATIONS | {"trip_details"}:
             question = "What city, region, or country would you like to travel to?"
         message = state.get("user_message", "")
         if (
@@ -2625,7 +2768,6 @@ class TravelAgentGraph:
                 + question
             )
 
-        pending = state.get("pending_clarification") or "trip_details"
         if missing_destination and pending in _DESTINATION_CLARIFICATIONS | {"trip_details"}:
             pending = "destination"
         if (

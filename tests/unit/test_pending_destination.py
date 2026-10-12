@@ -79,7 +79,7 @@ def test_destination_clarification_uses_name_not_destination_dict():
 
     answer = result["messages"][0].content
     assert answer.startswith(
-        "I found multiple places matching 'Goa'. Which one do you mean?"
+        "I found one matching place for 'Goa': Goa, Goa, India."
     )
     assert "{'id':" not in answer
 
@@ -136,7 +136,11 @@ def test_two_turn_run_selects_persisted_destination_candidate():
             }
 
     class Perception:
+        def __init__(self):
+            self.messages = []
+
         def understand(self, message, history):
+            self.messages.append(message)
             destination = "Goa, Goa, India" if message == "1" else "Goa"
             return TripPerception(
                 intent="plan_trip",
@@ -156,7 +160,8 @@ def test_two_turn_run_selects_persisted_destination_candidate():
     graph = TravelAgentGraph()
     graph.memory = Memory()
     graph.destination_resolver = Resolver()
-    graph.perception_agent = Perception()
+    perception_agent = Perception()
+    graph.perception_agent = perception_agent
     graph.planner_agent = Planner()
 
     first_turn = graph.run(
@@ -171,7 +176,7 @@ def test_two_turn_run_selects_persisted_destination_candidate():
     assert first_turn["pending_destination_candidates"] == [candidate]
 
     second_turn = graph.run(
-        user_message="1",
+        user_message="1. Goa, Goa, India",
         user_id="user_demo",
         session_id="destination-selection-flow",
         tenant_id="tenant_demo",
@@ -187,3 +192,49 @@ def test_two_turn_run_selects_persisted_destination_candidate():
     assert second_turn["pending_destination_candidates"] == []
     assert second_turn["answer"] == "What dates and budget would you prefer?"
     assert graph.destination_resolver.calls == ["Goa"]
+    assert perception_agent.messages == ["I want to plan a trip to Goa."]
+
+
+def test_numbered_candidate_reply_must_match_pending_candidate_label():
+    candidate = {
+        "name": "Kashmir", "admin1": "Punjab", "country": "Pakistan",
+    }
+    state = {
+        "pending_clarification": "destination",
+        "pending_destination_candidates": [candidate],
+        "user_message": "1. Kashmir, Punjab, Pakistan",
+    }
+    assert TravelAgentGraph._selected_destination_candidate(state) == candidate
+
+    state["user_message"] = "1. Kashmir, Punjab, India"
+    assert TravelAgentGraph._selected_destination_candidate(state) is None
+
+
+def test_single_candidate_clarification_accepts_confirmation_and_clears_only_destination():
+    candidate = {
+        "name": "Kashmir", "admin1": "Punjab", "country": "Pakistan",
+    }
+    graph = TravelAgentGraph.__new__(TravelAgentGraph)
+    prompt = graph.clarification_node({
+        "destination_resolution": {
+            "status": "ambiguous", "location": "Kashmir", "candidates": [candidate],
+        },
+        "pending_destination": "Kashmir",
+    })
+    assert "one matching place" in prompt["messages"][0].content
+    assert "Reply yes" in prompt["messages"][0].content
+
+    perception = TripPerception(
+        intent="find_transport", transport_mode="train", destination="Kashmir",
+    )
+    selected = graph.destination_selection_node({
+        "user_message": "yes",
+        "pending_clarification": "destination",
+        "pending_destination": "Kashmir",
+        "pending_destination_candidates": [candidate],
+        "perception": perception,
+    })
+    assert selected["destination_resolution"]["location"] == candidate
+    assert selected["pending_clarification"] is None
+    assert selected["pending_destination_candidates"] == []
+    assert perception.destination == "Kashmir, Punjab, Pakistan"
