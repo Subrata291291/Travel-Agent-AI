@@ -17,7 +17,11 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.runtime import Runtime
 from langgraph.graph.message import add_messages
 
-from app.agents.perception import PerceptionAgent
+from app.agents.perception import (
+    PerceptionAgent,
+    extract_date_range,
+    is_non_location_value,
+)
 from app.agents.planner import PlannerAgent
 from app.agents.executor import ToolExecutor
 
@@ -30,7 +34,7 @@ from app.tools.destination_resolver import DestinationResolver
 
 from app.schemas.tool import ToolContext
 from app.schemas.booking import BookingRequest
-from app.schemas.trip import TravelTask
+from app.schemas.trip import TravelPlan, TravelTask
 
 from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
@@ -964,13 +968,42 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
+        trip_context = state.get("trip_context") or {}
+        parsed_date_range = extract_date_range(
+            message,
+            reference_start_date=trip_context.get("start_date"),
+        )
+        if parsed_date_range:
+            current.start_date, current.end_date = parsed_date_range
+
+        invalid_pending_destination = bool(
+            state.get("pending_clarification") in _DESTINATION_CLARIFICATIONS
+            and is_non_location_value(state.get("pending_destination"))
+        )
+        for field_name in (
+            "destination", "original_destination", "transport_destination",
+            "hotel_destination",
+        ):
+            if is_non_location_value(getattr(current, field_name, None)):
+                setattr(current, field_name, None)
+        if invalid_pending_destination and len(message.split()) <= 4:
+            # A short answer to an obsolete date-as-destination question must
+            # not become a new destination through model interpretation.
+            current.destination = None
+            current.original_destination = None
+            current.transport_destination = None
+            current.hotel_destination = None
+
         is_new_trip = bool(re.search(
             r"\b(?:new|another|different)\s+trip\b",
             message,
             re.IGNORECASE,
         ))
         pending_destination_reply = None
-        if state.get("pending_clarification") == "destination":
+        if (
+            state.get("pending_clarification") == "destination"
+            and not invalid_pending_destination
+        ):
             pending_destination_reply = _contextual_destination_reply(
                 message, state.get("pending_destination")
             )
@@ -1002,12 +1035,12 @@ class TravelAgentGraph:
             if (state.get("trip_context") or {}).get("hotel_destination"):
                 current.hotel_destination = destination_correction
         route = re.search(
-            r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+            r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
         if not route:
             route = re.search(
-                r"^\s*(.+?)\s*(?:→|->)\s*(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+                r"^\s*(.+?)\s*(?:→|->)\s*(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
                 message, re.IGNORECASE,
             )
         if (
@@ -1016,9 +1049,14 @@ class TravelAgentGraph:
             and not re.search(r"\b(?:from|plan|trip|find|book|flight|travel|destination|change|actually)\b", message, re.IGNORECASE)
         ):
             route = re.search(
-                r"^\s*(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+                r"^\s*(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
                 message, re.IGNORECASE,
             )
+        if route and (
+            is_non_location_value(route.group(1))
+            or is_non_location_value(route.group(2))
+        ):
+            route = None
         if route:
             current.origin = route.group(1).strip(" .,!?")
             if not destination_correction:
@@ -1082,7 +1120,7 @@ class TravelAgentGraph:
                 or bool((state.get("trip_context") or {}).get("round_trip"))
             )
         )
-        if has_return_date_context:
+        if has_return_date_context and not parsed_date_range:
             return_date = _extract_contextual_return_date(
                 message,
                 (state.get("trip_context") or {}).get("start_date")
@@ -1091,7 +1129,7 @@ class TravelAgentGraph:
             if return_date:
                 current.end_date = return_date
         hotel_place = re.search(
-            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where|during|while)\b|[,.;!?]|$)",
+            r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where|during|while|from|check[- ]?in|check[- ]?out)\b|\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
         if hotel_place and not destination_correction:
@@ -1104,6 +1142,7 @@ class TravelAgentGraph:
             and not route
             and not destination_correction
             and not hotel_place
+            and not invalid_pending_destination
             and len(message.split()) <= 4
             and not re.search(
                 r"\b(?:i|we|my|actually|change|want|go|travel|book|find|search|hotels?|flight|trip|plan)\b|\d",
@@ -1143,7 +1182,13 @@ class TravelAgentGraph:
         # 3. Load previously saved trip context
         # --------------------------------------------------------
 
-        previous = {} if is_new_trip else (state.get("trip_context") or {})
+        previous = {} if is_new_trip else dict(trip_context)
+        for field_name in (
+            "destination", "original_destination", "transport_destination",
+            "hotel_destination",
+        ):
+            if is_non_location_value(previous.get(field_name)):
+                previous[field_name] = None
 
         # The LLM sometimes copies the numbered display line from an earlier
         # clarification (for example, "option 1: Srinagar, ...") into its
@@ -1192,7 +1237,10 @@ class TravelAgentGraph:
             route
             or hotel_place
             or destination_correction
-            or state.get("pending_clarification") in _DESTINATION_CLARIFICATIONS
+            or (
+                state.get("pending_clarification") in _DESTINATION_CLARIFICATIONS
+                and not invalid_pending_destination
+            )
             or exact_place_reply
         )
         if flight_origin_without_destination:
@@ -1405,6 +1453,12 @@ class TravelAgentGraph:
             result["pending_clarification"] = (
                 None if current.end_date else "flight_return_date"
             )
+        if invalid_pending_destination:
+            result.update({
+                "pending_clarification": None,
+                "pending_destination": None,
+                "pending_destination_candidates": [],
+            })
         return result
 
     # ========================================================
@@ -1419,6 +1473,40 @@ class TravelAgentGraph:
         """
         Convert perception into an executable travel plan.
         """
+
+        perception = state.get("perception")
+        if perception:
+            destinations = (
+                getattr(perception, "transport_destination", None),
+                getattr(perception, "hotel_destination", None),
+                getattr(perception, "destination", None),
+            )
+            has_destination = any(
+                value and not is_non_location_value(value)
+                for value in destinations
+            )
+            needs_destination = (
+                getattr(perception, "intent", None) in {
+                    "plan_trip", "find_hotel", "find_transport",
+                    "find_restaurant", "check_weather",
+                }
+                and not has_destination
+            )
+            if needs_destination:
+                question = "What city, region, or country would you like to travel to?"
+                return {
+                    "plan": TravelPlan(
+                        goal="Collect the destination before planning the trip.",
+                        needs_clarification=True,
+                        clarification_questions=[question],
+                        tasks=[TravelTask(
+                            task_id="clarify-destination",
+                            task_type="clarify",
+                            description=question,
+                        )],
+                    ),
+                    "clarification_needed": True,
+                }
 
         context_parameters = inspect.signature(self.memory.get_context).parameters
         context_kwargs = {}
@@ -1442,7 +1530,6 @@ class TravelAgentGraph:
             )
         )
 
-        perception = state.get("perception")
         if (
             state.get("pending_clarification") == "flight_return_date"
             and perception
@@ -1604,8 +1691,18 @@ class TravelAgentGraph:
                 if perception else None
             )
 
+        if is_non_location_value(destination):
+            destination = None
+
         pending_clarification = state.get("pending_clarification")
         pending_destination = state.get("pending_destination")
+        invalid_pending_destination = bool(
+            pending_clarification in _DESTINATION_CLARIFICATIONS
+            and is_non_location_value(pending_destination)
+        )
+        if invalid_pending_destination:
+            pending_clarification = None
+            pending_destination = None
         explicit_destination_correction = bool(
             _extract_destination_correction(state.get("user_message", ""))
         )
@@ -1673,6 +1770,11 @@ class TravelAgentGraph:
                     "status": "not_required"
                 },
                 "clarification_needed": False,
+                **({
+                    "pending_clarification": None,
+                    "pending_destination": None,
+                    "pending_destination_candidates": [],
+                } if invalid_pending_destination else {}),
                 **({
                     "pending_clarification": pending_clarification,
                     "pending_destination": None,
@@ -2491,6 +2593,23 @@ class TravelAgentGraph:
             "Please provide the missing details for your trip."
         )
         perception = state.get("perception")
+        missing_destination = bool(
+            perception
+            and getattr(perception, "intent", None) in {
+                "plan_trip", "find_hotel", "find_transport",
+                "find_restaurant", "check_weather",
+            }
+            and not any(
+                value and not is_non_location_value(value)
+                for value in (
+                    getattr(perception, "transport_destination", None),
+                    getattr(perception, "hotel_destination", None),
+                    getattr(perception, "destination", None),
+                )
+            )
+        )
+        if missing_destination:
+            question = "What city, region, or country would you like to travel to?"
         message = state.get("user_message", "")
         if (
             perception
@@ -2506,7 +2625,9 @@ class TravelAgentGraph:
                 + question
             )
 
-        pending = "trip_details"
+        pending = state.get("pending_clarification") or "trip_details"
+        if missing_destination and pending in _DESTINATION_CLARIFICATIONS | {"trip_details"}:
+            pending = "destination"
         if (
             perception
             and perception.transport_mode == "flight"

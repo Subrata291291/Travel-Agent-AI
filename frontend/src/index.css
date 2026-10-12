@@ -148,3 +148,172 @@ a {
   background: #cbd5e1;
   color: #0f172a;
 }
+
+/* Shared theme control for authenticated and public pages. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.5rem 0.75rem;
+  color: #334155;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.theme-toggle span:last-child {
+  display: none;
+}
+
+.theme-toggle:hover {
+  background: #f1f5f9;
+}
+
+.dark .theme-toggle {
+  border-color: #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.dark .theme-toggle:hover {
+  background: #334155;
+}
+
+/* Public login and registration pages use explicit theme colors to keep
+   labels, inputs, links and buttons readable in both modes. */
+.auth-page {
+  position: relative;
+  background: #f1f5f9;
+  color: #0f172a;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+.auth-theme-control {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+}
+
+.auth-card {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #0f172a;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.auth-title {
+  color: #0f172a;
+}
+
+.auth-subtitle,
+.auth-footer,
+.auth-hint {
+  color: #64748b;
+}
+
+.auth-label {
+  color: #334155;
+}
+
+.auth-input {
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+}
+
+.auth-input:focus {
+  border-color: #0f172a;
+  box-shadow: 0 0 0 3px rgb(15 23 42 / 0.12);
+}
+
+.auth-submit {
+  background: #0f172a;
+  color: #fff;
+}
+
+.auth-submit:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+.auth-link {
+  color: #0f172a;
+}
+
+.auth-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.dark .auth-page {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.dark .auth-card {
+  border-color: #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.dark .auth-title {
+  color: #f8fafc;
+}
+
+.dark .auth-subtitle,
+.dark .auth-footer,
+.dark .auth-hint {
+  color: #a7b5c8;
+}
+
+.dark .auth-label {
+  color: #dbe4f0;
+}
+
+.dark .auth-input {
+  border-color: #64748b;
+  background: #334155;
+  color: #f8fafc;
+}
+
+.dark .auth-input:focus {
+  border-color: #cbd5e1;
+  box-shadow: 0 0 0 3px rgb(203 213 225 / 0.18);
+}
+
+.dark .auth-submit {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.dark .auth-submit:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.dark .auth-link {
+  color: #f8fafc;
+}
+
+.dark .auth-error {
+  background: #451a1a;
+  color: #fecaca;
+}
+
+@media (max-width: 640px) {
+  .auth-theme-control {
+    top: 1rem;
+    right: 1rem;
+  }
+
+  .auth-theme-control .theme-toggle span:last-child {
+    display: none;
+  }
+}
+
+@media (min-width: 640px) {
+  .theme-toggle span:last-child {
+    display: inline;
+  }
+}

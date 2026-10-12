@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import ThemeToggle from "../components/ThemeToggle";
 
 function Login({ register = false }) {
   const navigate = useNavigate();
@@ -37,11 +38,14 @@ function Login({ register = false }) {
   };
 
   return (
-    <main className="min-h-screen bg-gray-100 flex items-center justify-center px-4 py-10">
-      <section className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
+    <main className="auth-page min-h-screen flex items-center justify-center px-4 py-10">
+      <div className="auth-theme-control">
+        <ThemeToggle />
+      </div>
+      <section className="auth-card w-full max-w-md rounded-2xl p-8 shadow-lg">
         <header className="mb-8 text-center">
-          <h1 className="text-3xl font-bold text-gray-900">Travel Agent</h1>
-          <p className="mt-2 text-gray-500">
+          <h1 className="auth-title text-3xl font-bold">Travel Agent</h1>
+          <p className="auth-subtitle mt-2">
             {register ? "Create an account to start planning" : "Sign in to manage your trips"}
           </p>
         </header>
@@ -49,28 +53,28 @@ function Login({ register = false }) {
         <form onSubmit={handleSubmit} className="space-y-5">
           {register && (
             <div>
-              <label htmlFor="name" className="mb-2 block text-sm font-medium text-gray-700">Full name</label>
-              <input id="name" name="name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={255} className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-gray-900" />
+              <label htmlFor="name" className="auth-label mb-2 block text-sm font-medium">Full name</label>
+              <input id="name" name="name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={255} className="auth-input w-full rounded-lg border px-4 py-3 outline-none" />
             </div>
           )}
           <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-gray-700">Email</label>
-            <input id="email" name="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-gray-900" />
+            <label htmlFor="email" className="auth-label mb-2 block text-sm font-medium">Email</label>
+            <input id="email" name="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required className="auth-input w-full rounded-lg border px-4 py-3 outline-none" />
           </div>
           <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-gray-700">Password</label>
-            <input id="password" name="password" type="password" autoComplete={register ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} maxLength={72} className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-gray-900" />
-            {register && <p className="mt-1 text-xs text-gray-500">Use at least 8 characters.</p>}
+            <label htmlFor="password" className="auth-label mb-2 block text-sm font-medium">Password</label>
+            <input id="password" name="password" type="password" autoComplete={register ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} maxLength={72} className="auth-input w-full rounded-lg border px-4 py-3 outline-none" />
+            {register && <p className="auth-hint mt-1 text-xs">Use at least 8 characters.</p>}
           </div>
-          {error && <div role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-          <button type="submit" disabled={loading} className="w-full rounded-lg bg-gray-900 px-4 py-3 font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60">
+          {error && <div role="alert" className="auth-error rounded-lg px-4 py-3 text-sm">{error}</div>}
+          <button type="submit" disabled={loading} className="auth-submit w-full rounded-lg px-4 py-3 font-medium transition disabled:cursor-not-allowed disabled:opacity-60">
             {loading ? (register ? "Creating account..." : "Signing in...") : (register ? "Create account" : "Sign in")}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-gray-600">
+        <p className="auth-footer mt-6 text-center text-sm">
           {register ? "Already have an account? " : "New to Travel Agent? "}
-          <Link className="font-medium text-gray-900 underline" to={register ? "/login" : "/register"}>
+          <Link className="auth-link font-medium underline" to={register ? "/login" : "/register"}>
             {register ? "Sign in" : "Create an account"}
           </Link>
         </p>

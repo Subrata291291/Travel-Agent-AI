@@ -1,6 +1,97 @@
 from app.llm.router import LLMRouter
 from app.schemas.perception import TripPerception
 import re
+from datetime import date, datetime
+from calendar import month_name, month_abbr
+
+
+_DATE_MONTHS = "|".join(
+    month for index in range(1, 13)
+    for month in (month_name[index], month_abbr[index])
+)
+
+
+def extract_date_range(
+    text: str,
+    reference_start_date: str | None = None,
+) -> tuple[str, str] | None:
+    """Parse a date range without inferring a year from the system clock."""
+    pattern = re.compile(
+        rf"\b(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?"
+        rf"(?P<start_month>{_DATE_MONTHS})"
+        rf"(?:,?\s+(?P<start_year>\d{{4}}))?\s+"
+        rf"(?:to|through|until|till|[-–—])\s*"
+        rf"(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
+        rf"(?:\s+(?:of\s+)?(?P<end_month>{_DATE_MONTHS}))?"
+        rf"(?:,?\s+(?P<end_year>\d{{4}}))?\b",
+        re.IGNORECASE,
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+
+    start_year = match.group("start_year")
+    if not start_year and reference_start_date:
+        try:
+            start_year = str(date.fromisoformat(reference_start_date).year)
+        except ValueError:
+            return None
+    if not start_year:
+        return None
+
+    def month_number(value: str) -> int | None:
+        for format_string in ("%B", "%b"):
+            try:
+                return datetime.strptime(value, format_string).month
+            except ValueError:
+                pass
+        return None
+
+    start_month = month_number(match.group("start_month"))
+    if start_month is None:
+        return None
+
+    end_month_text = match.group("end_month") or match.group("start_month")
+    end_month = month_number(end_month_text)
+    if end_month is None:
+        return None
+
+    try:
+        start = date(int(start_year), start_month, int(match.group("start_day")))
+        end_year = int(match.group("end_year") or start_year)
+        end = date(end_year, end_month, int(match.group("end_day")))
+        if end < start and not match.group("end_year"):
+            end = date(end_year + 1, end_month, int(match.group("end_day")))
+    except ValueError:
+        return None
+
+    if end < start:
+        return None
+    return start.isoformat(), end.isoformat()
+
+
+def is_non_location_value(value: str | None) -> bool:
+    """Reject date, duration, passenger, and room-count values as places."""
+    if not value:
+        return False
+    text = value.strip()
+    first_part = text.split(",", maxsplit=1)[0].strip()
+    if re.fullmatch(r"\d{1,4}(?:st|nd|rd|th)?", first_part, re.IGNORECASE):
+        return True
+    date_pattern = re.compile(
+        rf"(?:\b\d{{4}}-\d{{1,2}}-\d{{1,2}}\b|"
+        rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{_DATE_MONTHS})"
+        rf"(?:\s+\d{{4}})?\b|"
+        rf"\b(?:{_DATE_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?"
+        rf"(?:,?\s*\d{{4}})?\b)",
+        re.IGNORECASE,
+    )
+    quantity_pattern = re.compile(
+        r"\b\d+\s*(?:adults?|passengers?|travellers?|travelers?|people|persons?|"
+        r"rooms?|days?|nights?|weeks?|months?)\b",
+        re.IGNORECASE,
+    )
+    return bool(date_pattern.search(first_part) or quantity_pattern.fullmatch(text))
 
 
 class PerceptionAgent:
@@ -553,6 +644,9 @@ RULES:
 - If the user says only a region, city, country, date,
   number, or other short answer, determine whether it
   refers to something discussed earlier.
+
+- Never put a date, date range, duration, passenger count, or room count
+  into any destination field. A date-only message is not a location.
 
 - Do not invent a year.
 
@@ -1247,5 +1341,16 @@ Currency:
             prompt,
             TripPerception,
         )
+
+        date_range = extract_date_range(user_message)
+        if date_range:
+            result.start_date, result.end_date = date_range
+
+        for field_name in (
+            "destination", "original_destination", "transport_destination",
+            "hotel_destination",
+        ):
+            if is_non_location_value(getattr(result, field_name, None)):
+                setattr(result, field_name, None)
 
         return result
