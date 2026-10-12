@@ -1,4 +1,5 @@
 import api from "./api";
+import { chatRequestPayload } from "./chatSession";
 
 /**
  * Send a message to the Travel Agent.
@@ -16,10 +17,7 @@ export async function sendChatMessage({
   message,
   sessionId,
 }) {
-  const response = await api.post("/chat", {
-    message,
-    session_id: sessionId,
-  });
+  const response = await api.post("/chat", chatRequestPayload(message, sessionId));
 
   return response.data;
 }

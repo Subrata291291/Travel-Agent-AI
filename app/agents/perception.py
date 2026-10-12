@@ -564,6 +564,12 @@ RULES:
 
 - Extract dates only when the year is explicitly known.
 
+- Set round_trip = true only when the user explicitly asks for a return
+  flight, return ticket, or round trip. Do not infer a return flight from a
+  hotel stay, a duration, or a date range alone.
+- For flight-only requests, end_date is a return-flight date only when
+  round_trip is true. Hotel check-out dates belong to hotel requests.
+
 - Extract trip duration.
 
 - Extract number of travellers.

@@ -5,6 +5,10 @@ import {
   acquireSubmissionLock,
   insertAssistantResponse,
 } from "../src/services/chatMessageFlow.js";
+import {
+  chatRequestPayload,
+  getOrCreateSessionId,
+} from "../src/services/chatSession.js";
 
 
 test("one synchronous submission window starts only one workflow request", () => {
@@ -39,4 +43,21 @@ test("overlapping responses stay attached to their initiating messages", () => {
   assert.deepEqual(complete.map(({ id }) => id), [
     "user-1", "assistant-1", "user-2", "assistant-2",
   ]);
+});
+
+
+test("chat turns reuse the session stored for the open tab", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  const firstSession = getOrCreateSessionId(storage);
+  const nextTurnSession = getOrCreateSessionId(storage);
+
+  assert.equal(nextTurnSession, firstSession);
+  assert.deepEqual(chatRequestPayload("25th", nextTurnSession), {
+    message: "25th",
+    session_id: firstSession,
+  });
 });

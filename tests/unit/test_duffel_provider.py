@@ -194,6 +194,24 @@ def test_duffel_provider_resolves_city_names_and_preserves_offer_id():
     assert payload["data"]["slices"][0]["destination"] == "DEL"
 
 
+def test_duffel_provider_sends_two_slices_for_round_trip():
+    client = FakeDuffelClient(places={
+        "Kolkata": [{"type": "city", "name": "Kolkata", "iata_code": "CCU"}],
+        "Delhi": [{"type": "city", "name": "Delhi", "iata_code": "DEL"}],
+    })
+    DuffelFlightProvider(client).search_flights(
+        origin="Kolkata",
+        destination="Delhi",
+        departure_date="2026-11-20",
+        return_date="2026-11-25",
+    )
+    slices = client.post_calls[0][1]["data"]["slices"]
+    assert slices == [
+        {"origin": "CCU", "destination": "DEL", "departure_date": "2026-11-20"},
+        {"origin": "DEL", "destination": "CCU", "departure_date": "2026-11-25"},
+    ]
+
+
 def test_graph_routes_provider_generated_flight_id_as_transport_booking():
     graph = TravelAgentGraph()
     route = graph.perception_route(

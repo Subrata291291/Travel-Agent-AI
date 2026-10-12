@@ -5,6 +5,7 @@ import {
 } from "react";
 
 import { sendChatMessage } from "../services/chatService";
+import { createNewSessionId, getOrCreateSessionId } from "../services/chatSession";
 import {
   acquireSubmissionLock,
   insertAssistantResponse,
@@ -13,19 +14,6 @@ import InrPrice from "../components/InrPrice";
 import { useAuth } from "../context/AuthContext";
 import TravelAgentLogo from "../components/TravelAgentLogo";
 
-
-function getOrCreateSessionId() {
-  try {
-    const key = "travel_agent_session_id";
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const newSession = `web-${crypto.randomUUID()}`;
-    sessionStorage.setItem(key, newSession);
-    return newSession;
-  } catch {
-    return `web-${crypto.randomUUID()}`;
-  }
-}
 
 function readChatHistory(key) {
   try {
@@ -47,7 +35,7 @@ function readChatHistory(key) {
 function Chat() {
   const { user } = useAuth();
 
-  const [sessionId] = useState(getOrCreateSessionId);
+  const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const historyKey = `travel_agent_chat_history:${user?.tenant_id || ""}:${user?.user_id || ""}:${sessionId}`;
 
   const [messages, setMessages] = useState(() => readChatHistory(historyKey) || [
@@ -56,6 +44,7 @@ function Chat() {
       role: "assistant",
       content:
         "Hi! I'm your AI travel assistant. Tell me where you'd like to go, when you're travelling, and what you need help with.",
+      createdAt: new Date().toISOString(),
     },
   ]);
 
@@ -69,6 +58,21 @@ function Chat() {
 
   const textareaRef = useRef(null);
   const sendingRef = useRef(false);
+
+  function handleNewSession() {
+    if (loading || sendingRef.current) return;
+
+    setSessionId(createNewSessionId());
+    setMessages([{
+      id: "welcome",
+      role: "assistant",
+      content:
+        "Hi! I'm your AI travel assistant. Tell me where you'd like to go, when you're travelling, and what you need help with.",
+      createdAt: new Date().toISOString(),
+    }]);
+    setInput("");
+    setError("");
+  }
 
 
   // =========================================================
@@ -115,6 +119,7 @@ function Chat() {
       id: crypto.randomUUID(),
       role: "user",
       content: message,
+      createdAt: new Date().toISOString(),
     };
 
     setMessages((previous) => [
@@ -139,6 +144,7 @@ function Chat() {
         content:
           result.answer ||
           "I couldn't generate a response.",
+        createdAt: new Date().toISOString(),
         data: result,
       };
 
@@ -209,6 +215,8 @@ function Chat() {
 
       <ChatHeader
         sessionId={sessionId}
+        onNewSession={handleNewSession}
+        disabled={loading}
       />
 
 
@@ -369,6 +377,8 @@ function Chat() {
 
 function ChatHeader({
   sessionId,
+  onNewSession,
+  disabled,
 }) {
   return (
     <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
@@ -398,15 +408,29 @@ function ChatHeader({
       </div>
 
 
-      <div className="hidden text-right sm:block">
+      <div className="flex items-center gap-3">
 
-        <p className="text-[10px] uppercase tracking-wider text-slate-400">
-          Session
-        </p>
+        <div className="hidden text-right sm:block">
 
-        <p className="mt-0.5 max-w-[180px] truncate font-mono text-xs text-slate-500">
-          {sessionId}
-        </p>
+          <p className="text-[10px] uppercase tracking-wider text-slate-400">
+            Session
+          </p>
+
+          <p className="mt-0.5 max-w-[180px] truncate font-mono text-xs text-slate-500">
+            {sessionId}
+          </p>
+
+        </div>
+
+        <button
+          type="button"
+          onClick={onNewSession}
+          disabled={disabled}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Start a new chat session"
+        >
+          New session
+        </button>
 
       </div>
 
@@ -464,6 +488,13 @@ function Message({
           />
         </div>
 
+        <time
+          dateTime={message.createdAt || undefined}
+          className={`mt-1 block text-[11px] text-slate-400 ${isUser ? "text-right" : "text-left"}`}
+        >
+          {formatMessageDateTime(message.createdAt)}
+        </time>
+
 
         {/* Structured agent results */}
 
@@ -486,6 +517,16 @@ function Message({
 
     </div>
   );
+}
+
+function formatMessageDateTime(value) {
+  if (!value) return "Date and time unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date and time unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 

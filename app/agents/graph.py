@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, TypedDict
 import json
 import re
@@ -30,6 +30,7 @@ from app.tools.destination_resolver import DestinationResolver
 
 from app.schemas.tool import ToolContext
 from app.schemas.booking import BookingRequest
+from app.schemas.trip import TravelTask
 
 from app.services.booking_service import BookingService
 from app.services.hotel_booking_service import HotelBookingService
@@ -99,6 +100,53 @@ def _extract_explicit_origin(message: str) -> str | None:
             re.IGNORECASE,
         )
     return match.group(1).strip(" ,.!?;") if match else None
+
+
+def _extract_contextual_return_date(message: str, start_date: str | None) -> str | None:
+    """Parse a return-date clarification using known trip month/year context."""
+    months = (
+        "january|february|march|april|may|june|july|august|"
+        "september|october|november|december"
+    )
+    text = message.strip().lower()
+    match = re.search(
+        rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({months})\s*(\d{{4}})?\b",
+        text,
+    )
+    if not match:
+        match = re.search(
+            rf"\b({months})\s+(\d{{1,2}})(?:st|nd|rd|th)?\s*,?\s*(\d{{4}})?\b",
+            text,
+        )
+        if match:
+            month_name, day, year = match.groups()
+        else:
+            ordinal = re.fullmatch(r"\s*(\d{1,2})(?:st|nd|rd|th)?\s*[.!]?\s*", text)
+            if not ordinal or not start_date:
+                return None
+            try:
+                context = date.fromisoformat(start_date)
+                candidate = date(context.year, context.month, int(ordinal.group(1)))
+                return candidate.isoformat() if candidate >= context else None
+            except ValueError:
+                return None
+    else:
+        day, month_name, year = match.groups()
+
+    try:
+        if not year:
+            if not start_date:
+                return None
+            context = date.fromisoformat(start_date)
+            year = str(context.year)
+        else:
+            context = date.fromisoformat(start_date) if start_date else None
+        parsed = datetime.strptime(f"{day} {month_name} {year}", "%d %B %Y").date()
+        if context and parsed < context and not match.group(3):
+            return None
+        return parsed.isoformat()
+    except (ValueError, TypeError):
+        return None
 
 
 def _pending_after_destination_correction(pending: str | None) -> str | None:
@@ -799,6 +847,7 @@ class TravelAgentGraph:
             "room_quantity": perception.room_quantity,
             "start_date": perception.start_date,
             "end_date": perception.end_date,
+            "round_trip": perception.round_trip,
             "duration_days": perception.duration_days,
             "travellers": perception.travellers,
             "budget": perception.budget,
@@ -861,6 +910,11 @@ class TravelAgentGraph:
         )
 
         message = state["user_message"]
+        is_new_trip = bool(re.search(
+            r"\b(?:new|another|different)\s+trip\b",
+            message,
+            re.IGNORECASE,
+        ))
         destination_correction = _extract_destination_correction(message)
         if destination_correction:
             current.destination = destination_correction
@@ -871,6 +925,20 @@ class TravelAgentGraph:
             r"\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
         )
+        if not route:
+            route = re.search(
+                r"^\s*(.+?)\s*(?:→|->)\s*(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+                message, re.IGNORECASE,
+            )
+        if (
+            not route
+            and not destination_correction
+            and not re.search(r"\b(?:from|plan|trip|find|book|flight|travel|destination|change|actually)\b", message, re.IGNORECASE)
+        ):
+            route = re.search(
+                r"^\s*(.+?)\s+to\s+(.+?)(?=\s+(?:and|for|with|on|by)\b|[,.;!?]|$)",
+                message, re.IGNORECASE,
+            )
         if route:
             current.origin = route.group(1).strip(" .,!?")
             if not destination_correction:
@@ -884,6 +952,17 @@ class TravelAgentGraph:
             message,
             re.IGNORECASE,
         ))
+        if route and (flight_request or current.intent == "find_transport"):
+            is_new_trip = True
+        explicit_round_trip = bool(re.search(
+            r"\b(?:round[ -]?trip|return\s+(?:flight|ticket|journey)|there\s+and\s+back|i(?:'ll|\s+will)\s+return)\b",
+            message,
+            re.IGNORECASE,
+        ))
+        if explicit_round_trip:
+            current.round_trip = True
+        elif flight_request:
+            current.round_trip = False
         explicit_flight_origin = None
         flight_origin_without_destination = False
         if flight_request and not route and not destination_correction:
@@ -901,10 +980,11 @@ class TravelAgentGraph:
                 current.destination = None
                 current.transport_destination = None
         flight_clarification_reply = (
-            not flight_request
+            not is_new_trip
+            and not flight_request
             and not destination_correction
             and state.get("pending_clarification")
-            in {"flight_origin", "flight_destination"}
+            in {"flight_origin", "flight_destination", "flight_return_date"}
         )
         if flight_request or flight_clarification_reply:
             current.intent = "find_transport"
@@ -914,6 +994,21 @@ class TravelAgentGraph:
         elif flight_clarification_reply and state.get("pending_clarification") == "flight_destination":
             current.destination = message.strip()
             current.transport_destination = message.strip()
+        has_return_date_context = (
+            not is_new_trip
+            and (
+                state.get("pending_clarification") == "flight_return_date"
+                or bool((state.get("trip_context") or {}).get("round_trip"))
+            )
+        )
+        if has_return_date_context:
+            return_date = _extract_contextual_return_date(
+                message,
+                (state.get("trip_context") or {}).get("start_date")
+                or current.start_date,
+            )
+            if return_date:
+                current.end_date = return_date
         hotel_place = re.search(
             r"\b(?:hotels?|accommodation|stay)\s+(?:in|at)\s+(.+?)(?=\s+(?:and|for|with|where)\b|[,.;!?]|$)",
             message, re.IGNORECASE,
@@ -947,7 +1042,7 @@ class TravelAgentGraph:
         # 3. Load previously saved trip context
         # --------------------------------------------------------
 
-        previous = state.get("trip_context") or {}
+        previous = {} if is_new_trip else (state.get("trip_context") or {})
 
         # The LLM sometimes copies the numbered display line from an earlier
         # clarification (for example, "option 1: Srinagar, ...") into its
@@ -986,7 +1081,19 @@ class TravelAgentGraph:
             or bool(previous)
         )
 
-        has_explicit_destination = bool(route or hotel_place or destination_correction)
+        exact_place_reply = bool(
+            current.destination
+            and not re.search(r"\b(?:\d{1,2}(?:st|nd|rd|th)?|\d{4}|january|february|march|april|may|june|july|august|september|october|november|december)\b", message, re.IGNORECASE)
+            and re.sub(r"\s+", " ", current.destination).strip(" .,!?;").casefold()
+            == re.sub(r"\s+", " ", message).strip(" .,!?;").casefold()
+        )
+        has_explicit_destination = bool(
+            route
+            or hotel_place
+            or destination_correction
+            or state.get("pending_clarification") in _DESTINATION_CLARIFICATIONS
+            or exact_place_reply
+        )
         if flight_origin_without_destination:
             has_explicit_destination = True
 
@@ -1008,14 +1115,29 @@ class TravelAgentGraph:
         # 5. Preserve destination
         # --------------------------------------------------------
 
-        if not current.destination and not has_explicit_destination:
-            current.destination = previous.get(
-                "destination"
-            )
+        if not has_explicit_destination and previous.get("destination"):
+            # A model-inferred place on a date/origin-only follow-up must not
+            # overwrite the user's established route.
+            current.destination = previous.get("destination")
 
-        if not current.origin:
+        if (
+            state.get("pending_clarification") in _DESTINATION_CLARIFICATIONS
+            and (current.transport_mode == "flight" or previous.get("transport_mode") == "flight")
+        ):
+            current.transport_destination = current.destination
+        if route:
+            current.origin = route.group(1).strip(" .,!?->")
+        elif (
+            previous.get("origin")
+            and not explicit_origin
+            and state.get("pending_clarification") not in {"origin", "flight_origin"}
+        ):
             current.origin = previous.get("origin")
-        if not current.transport_destination and not flight_origin_without_destination:
+        elif not current.origin:
+            current.origin = previous.get("origin")
+        if not has_explicit_destination and previous.get("transport_destination"):
+            current.transport_destination = previous.get("transport_destination")
+        elif not current.transport_destination and not flight_origin_without_destination:
             current.transport_destination = previous.get("transport_destination") or current.destination
         if state.get("pending_clarification") == "origin":
             # A one-word reply answers the outstanding origin question; it
@@ -1058,6 +1180,9 @@ class TravelAgentGraph:
             current.duration_days = previous.get(
                 "duration_days"
             )
+
+        if not current.round_trip and not flight_request:
+            current.round_trip = bool(previous.get("round_trip"))
 
         # --------------------------------------------------------
         # 8. Preserve travellers
@@ -1162,16 +1287,21 @@ class TravelAgentGraph:
         result = {
             "perception": current
         }
-        if destination_correction:
+        if destination_correction or route or is_new_trip:
             result.update({
-                "pending_clarification": _pending_after_destination_correction(
-                    state.get("pending_clarification")
+                "pending_clarification": (
+                    None if is_new_trip or route else
+                    _pending_after_destination_correction(state.get("pending_clarification"))
                 ),
                 "pending_destination": None,
                 "pending_destination_candidates": [],
                 "destination_resolution": None,
                 "tool_context": None,
             })
+        if state.get("pending_clarification") == "flight_return_date" and not is_new_trip:
+            result["pending_clarification"] = (
+                None if current.end_date else "flight_return_date"
+            )
         return result
 
     # ========================================================
@@ -1209,12 +1339,137 @@ class TravelAgentGraph:
             )
         )
 
-        return {
+        perception = state.get("perception")
+        if (
+            state.get("pending_clarification") == "flight_return_date"
+            and perception
+            and not perception.end_date
+        ):
+            day_match = re.search(
+                r"\b(\d{1,2}(?:st|nd|rd|th)?)\b",
+                state.get("user_message", ""),
+                re.IGNORECASE,
+            )
+            question = (
+                f"Which month and year should I use for {day_match.group(1)} as your return date?"
+                if day_match
+                else "What month and year should I use for your return date?"
+            )
+            plan = plan.model_copy(update={
+                "needs_clarification": True,
+                "clarification_questions": [
+                    question,
+                    *[
+                        item for item in plan.clarification_questions
+                        if not re.search(r"\b(?:return|end)\s+date\b", item, re.IGNORECASE)
+                    ],
+                ],
+                "tasks": [
+                    TravelTask(
+                        task_id="clarify-return-date",
+                        task_type="clarify",
+                        description=question,
+                    ),
+                    *[
+                        item for item in plan.tasks
+                        if item.task_type != "clarify"
+                        or not re.search(r"\b(?:return|end)\s+date\b", item.description, re.IGNORECASE)
+                    ],
+                ],
+            })
+        if (
+            perception
+            and getattr(perception, "transport_mode", None) == "flight"
+            and getattr(perception, "round_trip", False)
+            and not getattr(perception, "end_date", None)
+            and not any(
+                re.search(r"\b(?:return|end)\s+date\b", question, re.IGNORECASE)
+                for question in plan.clarification_questions
+            )
+        ):
+            plan = plan.model_copy(update={
+                "needs_clarification": True,
+                "clarification_questions": [
+                    "What is your return date?",
+                    *plan.clarification_questions,
+                ],
+                "tasks": [
+                    TravelTask(
+                        task_id="clarify-return-date",
+                        task_type="clarify",
+                        description="Ask for the return flight date.",
+                    ),
+                    *plan.tasks,
+                ],
+            })
+        if (
+            perception
+            and getattr(perception, "transport_mode", None) == "flight"
+            and not getattr(perception, "round_trip", False)
+            and not getattr(perception, "hotel_destination", None)
+            and getattr(perception, "intent", None) not in {"find_hotel", "recommend_hotel"}
+        ):
+            # A one-way flight needs only its departure date. Some planner
+            # models apply hotel stay requirements to flight searches and ask
+            # for an end date/duration; discard only those flight-irrelevant
+            # clarification items.
+            irrelevant_date_question = re.compile(
+                r"\b(?:end\s+date|return\s+date|duration\s+of\s+(?:the\s+)?stay|"
+                r"length\s+of\s+(?:the\s+)?stay|how\s+long\s+(?:will|are)\s+you\s+stay)\b",
+                re.IGNORECASE,
+            )
+            def is_flight_irrelevant_date_question(text: str) -> bool:
+                return bool(
+                    irrelevant_date_question.search(text)
+                    and not re.search(
+                        r"\b(?:origin|destination|airport|traveller|traveler|passenger|departure)\b",
+                        text,
+                        re.IGNORECASE,
+                    )
+                )
+
+            questions = [
+                question for question in plan.clarification_questions
+                if not is_flight_irrelevant_date_question(question)
+            ]
+            removed_task_ids = {
+                task.task_id for task in plan.tasks
+                if task.task_type == "clarify"
+                and is_flight_irrelevant_date_question(task.description)
+            }
+            if plan.clarification_questions and not questions:
+                removed_task_ids.update(
+                    task.task_id for task in plan.tasks
+                    if task.task_type == "clarify"
+                )
+            tasks = [
+                task.model_copy(update={
+                    "depends_on": [
+                        dependency for dependency in task.depends_on
+                        if dependency not in removed_task_ids
+                    ]
+                })
+                for task in plan.tasks
+                if task.task_id not in removed_task_ids
+            ]
+            if len(questions) != len(plan.clarification_questions) or len(tasks) != len(plan.tasks):
+                plan = plan.model_copy(update={
+                    "clarification_questions": questions,
+                    "tasks": tasks,
+                    "needs_clarification": bool(
+                        questions
+                        or any(task.task_type == "clarify" for task in tasks)
+                    ),
+                })
+
+        clarification_needed = bool(plan.needs_clarification)
+        result = {
             "plan": plan,
-            "clarification_needed": bool(
-                plan.needs_clarification
-            ),
+            "clarification_needed": clarification_needed,
         }
+        if not clarification_needed and state.get("pending_clarification") == "trip_details":
+            result["pending_clarification"] = None
+        return result
 
     # ========================================================
     # NODE 3 — DESTINATION RESOLVER
@@ -2142,9 +2397,18 @@ class TravelAgentGraph:
                 + question
             )
 
+        pending = "trip_details"
+        if (
+            perception
+            and perception.transport_mode == "flight"
+            and perception.round_trip
+            and re.search(r"\b(?:return|end)\s+date\b", question, re.IGNORECASE)
+        ):
+            pending = "flight_return_date"
+
         return {
             "messages": [AIMessage(content=question)],
-            "pending_clarification": "trip_details",
+            "pending_clarification": pending,
             "pending_destination": None,
             "pending_destination_candidates": [],
         }
@@ -4739,6 +5003,13 @@ unsupported information.
                     tool_args["travellers"] = tool_context.travellers
                 if perception and perception.start_date:
                     tool_args["departure_date"] = perception.start_date
+                if (
+                    tool_call["name"] == "search_flights"
+                    and perception
+                    and perception.round_trip
+                    and perception.end_date
+                ):
+                    tool_args["return_date"] = perception.end_date
 
             # ----------------------------------------------------
             # Add canonical/resolved destination

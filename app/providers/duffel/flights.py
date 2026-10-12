@@ -32,11 +32,12 @@ class DuffelFlightProvider:
         destination: str,
         departure_date: str,
         travellers: int = 1,
+        return_date: str | None = None,
         cabin_class: str = "economy",
         max_connections: int = 1,
     ) -> list[TransportOption]:
         """
-        Search Duffel for one-way flight offers.
+        Search Duffel for one-way or round-trip flight offers.
 
         origin and destination should be IATA airport/city codes,
         for example:
@@ -59,6 +60,10 @@ class DuffelFlightProvider:
             raise ValueError("travellers must be at least 1.")
 
         self._validate_date(departure_date)
+        if return_date:
+            self._validate_date(return_date)
+            if return_date < departure_date:
+                raise ValueError("return_date cannot be before departure_date.")
 
         if cabin_class not in {
             "economy",
@@ -86,7 +91,16 @@ class DuffelFlightProvider:
                         "origin": origin,
                         "destination": destination,
                         "departure_date": departure_date,
-                    }
+                    },
+                    *(
+                        [{
+                            "origin": destination,
+                            "destination": origin,
+                            "departure_date": return_date,
+                        }]
+                        if return_date
+                        else []
+                    ),
                 ],
                 "passengers": passengers,
                 "cabin_class": cabin_class,

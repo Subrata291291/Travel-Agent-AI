@@ -19,6 +19,7 @@ def search_flights(
     destination: str,
     departure_date: str,
     travellers: int = 1,
+    return_date: str | None = None,
 ) -> List[TransportOption]:
     """
     Search available flight options using Duffel.
@@ -32,6 +33,9 @@ def search_flights(
             Departure date in YYYY-MM-DD format.
         travellers:
             Number of adult travellers.
+        return_date:
+            Optional return date in YYYY-MM-DD format. When supplied, Duffel
+            receives a second slice from destination back to origin.
 
     Returns:
         A list of real flight options returned by Duffel. Prices are
@@ -44,4 +48,5 @@ def search_flights(
         destination=destination,
         departure_date=departure_date,
         travellers=travellers,
+        return_date=return_date,
     )

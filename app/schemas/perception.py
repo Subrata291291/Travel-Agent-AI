@@ -63,6 +63,11 @@ class TripPerception(BaseModel):
         ),
     )
 
+    round_trip: bool = Field(
+        default=False,
+        description="True only when the user explicitly requests a return/round-trip flight.",
+    )
+
     duration_days: Optional[int] = Field(
         default=None,
         ge=1,
