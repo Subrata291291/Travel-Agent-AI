@@ -132,6 +132,30 @@ class AirportResolver:
         ]
         if exact:
             all_records = exact
+        else:
+            # Duffel's suggestions may include airports whose names merely
+            # resemble the query (for example, Delhi, Canada). Resolve the
+            # query's geography independently and use its country as a
+            # relevance signal; airport codes still come exclusively from
+            # Duffel. If geocoding is unavailable, retain the safe ambiguous
+            # result rather than guessing.
+            try:
+                location = self.geocoding.search(original)
+            except (requests.RequestException, ValueError, KeyError):
+                location = None
+            country_code = (
+                location.get("country_code")
+                if isinstance(location, dict)
+                else None
+            )
+            if isinstance(country_code, str) and country_code:
+                local_records = [
+                    item for item in all_records
+                    if str(item.get("country_code") or "").casefold()
+                    == country_code.casefold()
+                ]
+                if local_records:
+                    all_records = local_records
 
         unique = {item["iata_code"]: item for item in all_records}
         all_records = list(unique.values())

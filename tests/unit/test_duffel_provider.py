@@ -119,6 +119,35 @@ def test_airport_resolver_requires_clarification_for_ambiguous_airports():
     assert "Which airport would you like?" in str(error.value)
 
 
+@pytest.mark.parametrize("query", ["Delhi", "New Delhi"])
+def test_delhi_destination_prefers_geographically_relevant_duffel_candidate(query):
+    client = FakeDuffelClient(places={query: [
+        {"type": "airport", "name": "Indira Gandhi International Airport",
+         "city_name": "New Delhi", "iata_country_code": "IN", "iata_code": "DEL"},
+        {"type": "airport", "name": "Déline Airport", "city_name": "Déline",
+         "iata_country_code": "CA", "iata_code": "YWJ"},
+        {"type": "airport", "name": "Delingha Airport", "city_name": "Delingha",
+         "iata_country_code": "CN", "iata_code": "HXD"},
+    ]})
+
+    class IndiaGeocoder:
+        def search(self, _query):
+            return {"country_code": "IN"}
+
+    resolver = AirportResolver(client, geocoding=IndiaGeocoder())
+    result = resolver.lookup(query, field="destination")
+    assert result["iata_code"] == "DEL"
+
+
+@pytest.mark.parametrize("answer", ["DEL", "Indira Gandhi International Airport"])
+def test_pending_flight_destination_answer_resolves_to_del(answer):
+    client = FakeDuffelClient(places={answer: [
+        {"type": "airport", "name": "Indira Gandhi International Airport",
+         "city_name": "New Delhi", "iata_country_code": "IN", "iata_code": "DEL"},
+    ]})
+    assert AirportResolver(client).resolve(answer, field="destination") == "DEL"
+
+
 def test_duffel_provider_resolves_city_names_and_preserves_offer_id():
     offer = {
         "id": "off_live_123",

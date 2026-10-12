@@ -94,6 +94,18 @@ def test_explicit_flight_route_keeps_hotels_manali_separate():
     assert resolved["destination_resolution"]["location"]["name"] == "Manali"
 
 
+def test_new_explicit_flight_destination_replaces_stale_airport_clarification():
+    graph = _graph()
+    result = graph.perception_node(_state(
+        "Find a flight from Kolkata to Delhi on 20 November 2026",
+        pending_clarification="flight_destination",
+    ))
+    perception = result["perception"]
+    assert perception.origin == "Kolkata"
+    assert perception.transport_destination == "Delhi"
+    assert perception.destination == "Delhi"
+
+
 def test_ok_go_ahead_without_pending_exact_action_does_not_run_tools_or_purchase():
     graph = _graph()
     perception = TripPerception(

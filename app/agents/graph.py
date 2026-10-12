@@ -5008,9 +5008,24 @@ unsupported information.
             "transport_search_performed": transport_search_performed,
             "transport_search_error": transport_search_error,
             **(
+                {"clarification_needed": True}
+                if airport_clarification
+                else (
+                    {"clarification_needed": False}
+                    if requested_tool_names & transport_search_tools
+                    else {}
+                )
+            ),
+            **(
                 {"pending_clarification": airport_clarification}
                 if airport_clarification
-                else {}
+                else (
+                    {"pending_clarification": None}
+                    if requested_tool_names & transport_search_tools
+                    and state.get("pending_clarification")
+                    in {"flight_origin", "flight_destination"}
+                    else {}
+                )
             ),
             "hotel_search_error": hotel_search_error,
             **(
