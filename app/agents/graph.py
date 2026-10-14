@@ -68,6 +68,7 @@ _EXPLICIT_TRIP_DESTINATION = re.compile(
     re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
+_EXPLICIT_TRIP_ACTION = re.compile(r"\b(?:plan|search|find|book|reserve|compare|check availability|show options)\b", re.I)
 
 
 def _extract_explicit_trip_destination(message: str) -> str | None:
@@ -5856,8 +5857,9 @@ unsupported information.
         # Extract only when a stable-preference cue is present. Failures are
         # isolated inside LongTermMemory and never interrupt the travel turn.
         memory_preferences = getattr(self.memory, "preferences", None)
+        saved_preference_count = 0
         if memory_preferences is not None:
-            memory_preferences.extract_and_store(
+            saved_preference_count = memory_preferences.extract_and_store(
                 db, user_id, tenant_id, user_message
             )
 
@@ -6020,16 +6022,21 @@ unsupported information.
         # Execute graph
         # ----------------------------------------------------
 
-        graph_started = perf_counter()
-        try:
-            result = self.graph.invoke(initial_state, context=GraphContext(db=db))
-            graph_outcome = "success"
-        except Exception:
-            graph_outcome = "failure"
-            raise
-        finally:
-            from app.core.request_context import get_request_id
-            logger.info("Operation duration request_id=%s operation=GraphExecution outcome=%s elapsed_ms=%.2f", get_request_id() or "unavailable", graph_outcome, (perf_counter()-graph_started)*1000)
+        from app.core.request_context import get_request_id
+        if saved_preference_count and re.search(r"\bremember\b", user_message, re.I) and not _EXPLICIT_TRIP_ACTION.search(user_message):
+            answer = "I’ve saved your travel preferences for future trips."
+            result = {"messages": [AIMessage(content=answer)], "answer": answer}
+            logger.info("Operation duration request_id=%s operation=GraphExecution outcome=skipped_preference_saved elapsed_ms=0", get_request_id() or "unavailable")
+        else:
+            graph_started = perf_counter()
+            try:
+                result = self.graph.invoke(initial_state, context=GraphContext(db=db))
+                graph_outcome = "success"
+            except Exception:
+                graph_outcome = "failure"
+                raise
+            finally:
+                logger.info("Operation duration request_id=%s operation=GraphExecution outcome=%s elapsed_ms=%.2f", get_request_id() or "unavailable", graph_outcome, (perf_counter()-graph_started)*1000)
 
         def state_value(
             key: str,

@@ -48,10 +48,11 @@ class FakeExtractionRouter:
 
 class MultiPreferenceExtractionRouter:
     def invoke_structured(self, _prompt, _schema):
+        quote = "Please remember these preferences for my future trips: I prefer travelling by train, I am vegetarian, and I prefer budget hotels."
         return {"memories": [
-            {"text": "Prefers travelling by train", "topic": "general", "source_quote": "I prefer travelling by train", "kind": "semantic", "importance": .8, "confidence": .9},
-            {"text": "Is vegetarian", "topic": "general", "source_quote": "I am vegetarian", "kind": "semantic", "importance": .8, "confidence": .9},
-            {"text": "Prefers budget hotels", "topic": "general", "source_quote": "I prefer budget hotels", "kind": "semantic", "importance": .8, "confidence": .9},
+            {"text": "Prefers travelling by train", "topic": "general", "source_quote": quote, "kind": "semantic", "importance": .8, "confidence": .9},
+            {"text": "Is vegetarian", "topic": "general", "source_quote": quote, "kind": "semantic", "importance": .8, "confidence": .9},
+            {"text": "Prefers budget hotels", "topic": "general", "source_quote": quote, "kind": "semantic", "importance": .8, "confidence": .9},
         ]}
 
 
@@ -126,7 +127,7 @@ def test_authenticated_chat_persists_preference_vector_and_messages(test_db, mon
         ).order_by(ConversationMessage.message_id)).all()
         assert [item.role for item in messages] == ["human", "assistant"]
         assert messages[0].content == message
-        assert "train preference" in messages[1].content
+        assert messages[1].content == "I’ve saved your travel preferences for future trips."
 
 
 def test_extraction_failure_is_nonfatal_but_still_persists_chat(test_db, monkeypatch, caplog):
@@ -357,7 +358,9 @@ def test_authenticated_chat_can_recall_saved_preference_on_followup(test_db, mon
     )
 
 
-def test_authenticated_chat_extracts_and_recalls_multiple_categories_in_new_session(test_db, monkeypatch):
+def test_authenticated_chat_extracts_and_recalls_multiple_categories_in_new_session(test_db, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    quote = "Please remember these preferences for my future trips: I prefer travelling by train, I am vegetarian, and I prefer budget hotels."
     test_db.add(Tenant(tenant_id="tenant-a", name="Test", slug="tenant-a", status="active"))
     test_db.add(User(user_id="user-a", tenant_id="tenant-a", email="traveler@example.test", name="Traveler", role="user", status="active"))
     test_db.commit()
@@ -387,13 +390,19 @@ def test_authenticated_chat_extracts_and_recalls_multiple_categories_in_new_sess
     headers = {"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"}
     try:
         client = TestClient(app)
-        saved = client.post("/api/v1/chat", json={"message": "I prefer travelling by train. I am vegetarian. I prefer budget hotels.", "session_id": "save-prefs"}, headers=headers)
+        saved = client.post("/api/v1/chat", json={"message": "Please remember these preferences for my future trips: I prefer travelling by train, I am vegetarian, and I prefer budget hotels.", "session_id": "save-prefs"}, headers=headers)
         assert saved.status_code == 200, saved.text
+        assert saved.json()["answer"] == "I’ve saved your travel preferences for future trips."
         recalled = client.post("/api/v1/chat", json={"message": "List every saved preference", "session_id": "new-recall-session"}, headers=headers)
     finally:
         app.dependency_overrides.clear()
     assert recalled.status_code == 200, recalled.text
-    assert perception.calls == 1
+    assert perception.calls == 0
     assert "Prefers travelling by train" in recalled.json()["answer"]
     assert "Is vegetarian" in recalled.json()["answer"]
     assert "Prefers budget hotels" in recalled.json()["answer"]
+    assert {item.topic for item in agent.memory.preferences.list(test_db, "user-a", "tenant-a")} == {"transport", "diet", "accommodation"}
+    request_id = saved.headers["X-Request-ID"]
+    assert f"request_id={request_id}" in caplog.text
+    assert "extracted=3 accepted=3 rejected=0 persisted=3 embedding=indexed save=saved" in caplog.text
+    assert quote not in caplog.text

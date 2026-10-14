@@ -84,7 +84,6 @@ def is_explicit_memory_recall(query: str) -> bool:
 
 def _normalized_topic(candidate: MemoryCandidate) -> str:
     """Derive a conflict category from evidenced preference terms."""
-    evidence = (candidate.text + " " + candidate.source_quote).casefold()
     categories = (
         ("transport", r"\b(train|rail|flight|fly|air|bus|coach)\w*\b"),
         ("diet", r"\b(vegetarian|vegan|food|diet|meal)\w*\b"),
@@ -92,8 +91,23 @@ def _normalized_topic(candidate: MemoryCandidate) -> str:
         ("seating", r"\b(window|aisle|seat|seating)\w*\b"),
         ("accessibility", r"\b(accessib|wheelchair|mobility|step.free)\w*\b"),
     )
-    matched = [name for name, pattern in categories if re.search(pattern, evidence)]
-    return matched[0] if len(matched) == 1 else candidate.topic.strip().lower()
+    text = candidate.text.casefold()
+    text_matches = [name for name, pattern in categories if re.search(pattern, text)]
+    if len(text_matches) == 1:
+        return text_matches[0]
+    quote = candidate.source_quote.casefold()
+    quote_matches = [name for name, pattern in categories if re.search(pattern, quote)]
+    if len(text_matches) == 0 and len(quote_matches) == 1:
+        return quote_matches[0]
+    proposed = candidate.topic.strip().lower()
+    known_categories = {name for name, _pattern in categories}
+    if proposed in known_categories and len(text_matches) < 2:
+        return proposed
+    # A broad or ambiguous extractor topic cannot safely define conflict.
+    # Isolate it by normalized candidate wording; known transport preferences
+    # still share the explicit transport category and can supersede each other.
+    words = re.findall(r"[a-z0-9]+", text)
+    return "preference:" + "_".join(words[:7])[:68]
 
 
 def contains_sensitive_information(value: str) -> bool:

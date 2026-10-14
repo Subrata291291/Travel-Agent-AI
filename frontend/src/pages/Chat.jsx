@@ -981,8 +981,8 @@ function BookingResult({
       className={[
         "rounded-xl border p-4",
         isCancelled
-          ? "border-red-200 bg-red-50"
-          : "border-amber-200 bg-amber-50",
+          ? "border-red-200 bg-red-50 dark:border-red-900/70 dark:bg-red-950/35"
+          : "border-amber-200 bg-amber-50 dark:border-amber-700/70 dark:bg-slate-800",
       ].join(" ")}
     >
 
@@ -992,8 +992,8 @@ function BookingResult({
           className={[
             "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-semibold",
             isCancelled
-              ? "bg-red-100 text-red-600"
-              : "bg-amber-100 text-amber-700",
+              ? "bg-red-100 text-red-600 dark:bg-red-900/60 dark:text-red-300"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300",
           ].join(" ")}
         >
           {isCancelled ? "×" : "i"}
@@ -1001,45 +1001,45 @@ function BookingResult({
 
         <div className="min-w-0">
 
-          <p className="font-semibold text-slate-900">
+          <p className="font-semibold text-slate-900 dark:text-slate-100">
             {isCancelled
               ? "Booking cancelled"
               : "Booking record saved"}
           </p>
 
-          <p className="mt-1 font-mono text-xs text-slate-500">
+          <p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
             {booking.booking_id ||
               "Booking ID unavailable"}
           </p>
 
           {booking.status && (
-            <p className="mt-2 text-xs capitalize text-slate-500">
+            <p className="mt-2 text-xs capitalize text-slate-500 dark:text-slate-300">
               Status: {booking.status}
             </p>
           )}
 
           {!isCancelled && (
-            <p className="mt-2 max-w-xl text-xs leading-5 text-amber-800">
+            <p className="mt-2 max-w-xl text-xs leading-5 text-amber-800 dark:text-amber-200">
               This is the app's local record. A supplier reservation and customer payment are not completed by this chat yet.
             </p>
           )}
 
           {!isCancelled && booking.mode && (
-            <div className="mt-4 space-y-3 border-t border-amber-200 pt-3 text-sm">
+            <div className="mt-4 space-y-3 border-t border-amber-200 pt-3 text-sm dark:border-amber-700/60">
               <div className="flex items-start justify-between gap-4">
-                <span className="text-slate-600">Price per traveller</span>
+                <span className="text-slate-600 dark:text-slate-300">Price per traveller</span>
                 <InrPrice
                   amount={booking.price}
                   currency={booking.currency}
-                  className="text-right font-semibold text-slate-900"
+                  className="text-right font-semibold text-slate-900 dark:text-slate-100"
                 />
               </div>
               <div className="flex items-start justify-between gap-4">
-                <span className="text-slate-600">Total price</span>
+                <span className="text-slate-600 dark:text-slate-300">Total price</span>
                 <InrPrice
                   amount={booking.total_price}
                   currency={booking.currency}
-                  className="text-right font-bold text-slate-900"
+                  className="text-right font-bold text-slate-900 dark:text-slate-100"
                 />
               </div>
             </div>

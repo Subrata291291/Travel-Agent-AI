@@ -70,7 +70,10 @@ def test_same_transport_topic_supersedes_without_removing_other_categories(test_
     old = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer flights", "general"))
     diet = service.upsert(test_db, "u", "tenant-a", _candidate("I am vegetarian", "general"))
     hotel = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer budget hotels", "general"))
-    new = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer trains", "general"))
+    new = service.upsert(test_db, "u", "tenant-a", MemoryCandidate(
+        text="I prefer trains", topic="general",
+        source_quote="Please remember these preferences: I prefer trains, I am vegetarian, and I prefer budget hotels.",
+    ))
     assert test_db.get(UserMemory, old.memory_id).status == "superseded"
     assert {item.topic for item in service.list(test_db, "u", "tenant-a")} == {"transport", "diet", "accommodation"}
     assert {item.memory_id for item in service.list(test_db, "u", "tenant-a")} == {diet.memory_id, hotel.memory_id, new.memory_id}
