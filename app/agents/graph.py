@@ -69,6 +69,19 @@ _EXPLICIT_TRIP_DESTINATION = re.compile(
 )
 logger = logging.getLogger(__name__)
 _EXPLICIT_TRIP_ACTION = re.compile(r"\b(?:plan|search|find|book|reserve|compare|check availability|show options)\b", re.I)
+_GENERAL_GREETING = re.compile(r"\s*(?:hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you|okay|ok|nice to meet you)[!.?\s]*\s*", re.I)
+_NAME_STATEMENT = re.compile(r"\s*my name is\s+([\w'-]+)[.!?\s]*$", re.I)
+_NAME_QUESTION = re.compile(r"\s*(?:what|wh?t|whst|who)\s+is\s+my\s+name(?:\s+again)?[?!.,\s]*$", re.I)
+_GENERAL_QUESTION = re.compile(r"^\s*(?:what\s+is|who\s+is|why\b|how\s+does|define\b|explain\b)", re.I)
+_EXPLICIT_TRAVEL_REQUEST = re.compile(
+    r"\b(?:plan|search|find|look\s+for|book|reserve|compare|show\s+options|"
+    r"recommend|suggest)\b.{0,60}\b(?:trip|travel|flight|train|bus|hotel|"
+    r"restaurant|route|ticket|destination|transport)\b|"
+    r"\b(?:weather|forecast)\s+(?:in|at|for)\b|"
+    r"\b(?:change|update|replace|set)\s+(?:the\s+)?destination\b|"
+    r"\b(?:want|plan)\s+to\s+(?:travel|go)\s+to\b",
+    re.I,
+)
 
 
 def _extract_explicit_trip_destination(message: str) -> str | None:
@@ -632,6 +645,8 @@ class TravelAgentGraph:
             self.memory_recall_node,
         )
 
+        graph.add_node("general_conversation", self.general_conversation_node)
+
         graph.add_node(
             "budget_conflict",
             self.budget_conflict_node,
@@ -741,8 +756,12 @@ class TravelAgentGraph:
 
         graph.add_conditional_edges(
             START,
-            lambda state: "memory_recall" if is_explicit_memory_recall(state.get("user_message", "")) else "perception",
-            {"memory_recall": "memory_recall", "perception": "perception"},
+            self.start_route,
+            {
+                "memory_recall": "memory_recall",
+                "general_conversation": "general_conversation",
+                "perception": "perception",
+            },
         )
 
         # ----------------------------------------------------
@@ -774,6 +793,7 @@ class TravelAgentGraph:
                 "past_travel_date_clarification": "past_travel_date_clarification",
                 "acknowledgement": "acknowledgement",
                 "memory_recall": "memory_recall",
+                "general_conversation": "general_conversation",
                 "hotel_recommendation": "hotel_recommendation",
                 "budget_conflict": "budget_conflict",
             },
@@ -793,6 +813,7 @@ class TravelAgentGraph:
         graph.add_edge("past_travel_date_clarification", END)
         graph.add_edge("acknowledgement", END)
         graph.add_edge("memory_recall", END)
+        graph.add_edge("general_conversation", END)
 
         # ----------------------------------------------------
         # DESTINATION ROUTING
@@ -2304,6 +2325,12 @@ class TravelAgentGraph:
         if self._is_memory_recall_request(state.get("user_message", "")):
             return "memory_recall"
 
+        if perception and getattr(perception, "intent", None) in {"other", "question"}:
+            if self._is_general_conversation_request(state.get("user_message", "")):
+                return "general_conversation"
+            if not _EXPLICIT_TRAVEL_REQUEST.search(state.get("user_message", "")):
+                return "general_conversation"
+
         return "destination"
 
     @staticmethod
@@ -2398,6 +2425,55 @@ class TravelAgentGraph:
             answer = "Your saved travel preferences: " + "; ".join(saved) + "."
         else:
             answer = "I don't have any saved travel preferences for your account yet."
+        return {"messages": [AIMessage(content=answer)], "answer": answer}
+
+    @staticmethod
+    def start_route(state: TravelState) -> str:
+        message = state.get("user_message", "")
+        if is_explicit_memory_recall(message):
+            return "memory_recall"
+        if TravelAgentGraph._is_general_conversation_request(message):
+            return "general_conversation"
+        return "perception"
+
+    @staticmethod
+    def _is_general_conversation_request(message: str) -> bool:
+        text = (message or "").strip()
+        if not text:
+            return False
+        if _GENERAL_GREETING.fullmatch(text) or _NAME_STATEMENT.fullmatch(text) or _NAME_QUESTION.fullmatch(text):
+            return True
+        # A question phrased as a direct request for current travel data or an
+        # explicit planning action must keep using the travel graph.
+        if _EXPLICIT_TRAVEL_REQUEST.search(text) or re.search(r"\b(?:weather|forecast)\b", text, re.I):
+            return False
+        if re.search(r"\b(?:please\s+)?remember\b|\bsave\s+(?:this|my)\b", text, re.I):
+            return True
+        return bool(_GENERAL_QUESTION.search(text))
+
+    def general_conversation_node(
+        self,
+        state: TravelState,
+        runtime: Runtime[GraphContext] | None = None,
+    ):
+        """Answer general turns from this authenticated session's history, without tools."""
+        history_parameters = inspect.signature(self.memory.get_messages).parameters
+        history_kwargs = {"db": runtime.context.db if runtime else None} if "db" in history_parameters else {}
+        history = self.memory.get_messages(
+            state["session_id"], state["tenant_id"], state["user_id"], **history_kwargs
+        )
+        messages = [
+            ("system", "You are a friendly assistant. Answer ordinary conversation and questions naturally. Use only facts the user shared in this conversation when asked about them; do not invent personal facts or claim that information was saved permanently. Do not start trip planning unless the user explicitly requests it."),
+            *[("human" if item.get("role") == "human" else "assistant", item.get("content", "")) for item in history[-40:]],
+        ]
+        started = perf_counter()
+        response = self.router.invoke(messages)
+        answer = getattr(response, "content", str(response))
+        from app.core.request_context import get_request_id
+        logger.info(
+            "Operation duration request_id=%s operation=GeneralConversation outcome=success elapsed_ms=%.2f history_messages=%d",
+            get_request_id() or "unavailable", (perf_counter() - started) * 1000, len(history[-40:]),
+        )
         return {"messages": [AIMessage(content=answer)], "answer": answer}
 
     def destination_selection_node(self, state: TravelState):

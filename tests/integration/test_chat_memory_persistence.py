@@ -157,6 +157,9 @@ def test_extraction_failure_is_nonfatal_but_still_persists_chat(test_db, monkeyp
         def invoke_with_tools(self, _messages, _tools):
             return AIMessage(content="How can I help with your trip?")
 
+        def invoke(self, _messages):
+            return AIMessage(content="I can use that preference in this conversation.")
+
     agent.perception_agent = FakePerception()
     agent.planner_agent = FakePlanner()
     agent.router = FakeChatRouter()

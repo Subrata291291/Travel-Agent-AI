@@ -228,7 +228,9 @@ class LLMRouter:
     def invoke(self, messages):
         errors = []
 
-        for provider_name in self.provider_order:
+        correlation_id = get_request_id() or str(uuid4())
+        for attempt_number, provider_name in enumerate(self.provider_order, start=1):
+            started = perf_counter()
 
             try:
                 logger.info(
@@ -241,8 +243,12 @@ class LLMRouter:
                 response = llm.invoke(messages)
 
                 logger.info(
-                    "LLM provider succeeded: %s",
-                    provider_name
+                    "LLM attempt request_id=%s operation=GeneralConversation provider=%s model=%s attempt=%d outcome=success elapsed_ms=%.2f",
+                    correlation_id,
+                    provider_name,
+                    self._configured_model(provider_name),
+                    attempt_number,
+                    (perf_counter() - started) * 1000,
                 )
 
                 return response
@@ -256,6 +262,12 @@ class LLMRouter:
 
                 errors.append(
                     f"{provider_name}: not configured"
+                )
+
+                logger.warning(
+                    "LLM attempt request_id=%s operation=GeneralConversation provider=%s model=%s attempt=%d outcome=configuration_failure elapsed_ms=%.2f",
+                    correlation_id, provider_name, self._configured_model(provider_name),
+                    attempt_number, (perf_counter() - started) * 1000,
                 )
 
                 continue
@@ -273,6 +285,13 @@ class LLMRouter:
                 errors.append(
                     f"{provider_name}: "
                     f"{type(classified_error).__name__}"
+                )
+
+                logger.warning(
+                    "LLM attempt request_id=%s operation=GeneralConversation provider=%s model=%s attempt=%d outcome=failure category=%s elapsed_ms=%.2f",
+                    correlation_id, provider_name, self._configured_model(provider_name),
+                    attempt_number, self._exception_category(error),
+                    (perf_counter() - started) * 1000,
                 )
 
                 continue
