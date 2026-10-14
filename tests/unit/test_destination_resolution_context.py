@@ -64,6 +64,101 @@ def test_unqualified_multiple_exact_places_remain_ambiguous():
     assert resolver.resolve("Springfield")["status"] == "ambiguous"
 
 
+def test_action_phrases_are_removed_without_losing_geographic_qualifiers():
+    resolver = DestinationResolver()
+    queries = []
+
+    class Geocoder:
+        def search_candidates(self, query, country_code=None):
+            queries.append(query)
+            return [{"id": 1, "name": "Gangtok", "admin1": "Sikkim",
+                     "country": "India", "feature_code": "PPLA2"}]
+
+    resolver.geocoding = Geocoder()
+    for phrase in (
+        "visit Gangtok, Sikkim, India",
+        "I want to visit Gangtok, Sikkim, India",
+        "travel to Gangtok, Sikkim, India",
+        "I want to travel to Gangtok, Sikkim, India",
+    ):
+        result = resolver.resolve(phrase)
+        assert result["status"] == "resolved"
+    assert queries == [query for _ in range(4) for query in (
+        "Gangtok", "Gangtok, Gangtok",
+    )]
+
+
+def test_explicit_new_trip_overrides_stale_pending_destination_before_resolution():
+    graph = TravelAgentGraph.__new__(TravelAgentGraph)
+
+    class Memory:
+        def get_messages(self, *_args):
+            return []
+
+    class Perception:
+        def understand(self, _message, _history):
+            return TripPerception(intent="plan_trip", destination="Andhapradesh, Sikkim")
+
+    class Resolver:
+        def __init__(self):
+            self.queries = []
+
+        def resolve(self, value):
+            self.queries.append(value)
+            return {"status": "resolved", "location": {"name": "Sikkim", "admin1": "Sikkim", "country": "India"}, "candidates": []}
+
+    graph.memory = Memory()
+    graph.perception_agent = Perception()
+    graph.destination_resolver = Resolver()
+    state = {
+        "user_message": "Plan a trip to Sikkim.", "session_id": "same",
+        "tenant_id": "tenant", "user_id": "user",
+        "pending_clarification": "destination", "pending_destination": "Andhapradesh",
+        "pending_destination_candidates": [],
+        "trip_context": {"destination": "Andhapradesh", "travellers": 4},
+    }
+    extracted = graph.perception_node(state)
+    resolved = graph.destination_resolver_node({**state, **extracted})
+    assert extracted["perception"].destination == "Sikkim"
+    assert extracted["perception"].travellers == 1
+    assert graph.destination_resolver.queries == ["Sikkim"]
+    assert resolved["destination_resolution"]["status"] == "resolved"
+
+
+def test_natural_trip_phrases_override_stale_perception_destination():
+    graph = TravelAgentGraph.__new__(TravelAgentGraph)
+
+    class Memory:
+        def get_messages(self, *_args):
+            return []
+
+    class Perception:
+        def understand(self, _message, _history):
+            return TripPerception(intent="plan_trip", destination="visit Gangtok")
+
+    graph.memory = Memory()
+    graph.perception_agent = Perception()
+    for message in (
+        "Plan a trip to Sikkim.",
+        "Plan a trip to Sikkim, India.",
+        "I want to visit Gangtok, Sikkim, India.",
+        "I want to travel to Gangtok, Sikkim, India.",
+    ):
+        extracted = graph.perception_node({
+            "user_message": message, "session_id": "new-trip",
+            "tenant_id": "tenant", "user_id": "user",
+            "pending_clarification": None,
+            "trip_context": {"destination": "Old place", "travellers": 4},
+        })
+        expected = (
+            "Sikkim" if message == "Plan a trip to Sikkim."
+            else "Sikkim, India" if message == "Plan a trip to Sikkim, India."
+            else "Gangtok, Sikkim, India"
+        )
+        assert extracted["perception"].destination == expected
+        assert extracted["perception"].original_destination == expected
+
+
 def test_pending_geographic_reply_is_used_and_success_clears_pending_state():
     graph = TravelAgentGraph.__new__(TravelAgentGraph)
 

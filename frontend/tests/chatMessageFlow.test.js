@@ -7,6 +7,7 @@ import {
 } from "../src/services/chatMessageFlow.js";
 import {
   chatRequestPayload,
+  createNewSessionId,
   getOrCreateSessionId,
 } from "../src/services/chatSession.js";
 
@@ -60,4 +61,22 @@ test("chat turns reuse the session stored for the open tab", () => {
     message: "25th",
     session_id: firstSession,
   });
+});
+
+
+test("a new session gets a distinct workflow key", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  const oldSession = getOrCreateSessionId(storage);
+  const newSession = createNewSessionId(storage);
+
+  assert.notEqual(newSession, oldSession);
+  assert.equal(getOrCreateSessionId(storage), newSession);
+  assert.notEqual(
+    chatRequestPayload("Plan a trip to Sikkim", newSession).session_id,
+    oldSession,
+  );
 });

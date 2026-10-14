@@ -87,6 +87,13 @@ class DestinationResolver:
         # collapse duplicate fragments before calling the geocoder.
         cleaned = re.sub(r"\s+", " ", location).strip(" ,.!?;:")
         cleaned = re.sub(
+            r"^(?:(?:i\s+)?(?:want|would\s+like)\s+to\s+)?"
+            r"(?:visit|travel\s+to|go\s+to)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip(" ,.!?;:")
+        cleaned = re.sub(
             r"\s+(?:during|for|on|while)\s+(?:my|our|this|the)\s+"
             r"(?:trip|travel|vacation|holiday)\b.*$",
             "",

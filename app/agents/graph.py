@@ -57,6 +57,18 @@ _DESTINATION_OPTION_PREFIX = re.compile(
     r"^\s*(?:option\s*)?#?\s*\d+\s*[:.)\-–—]\s*",
     re.IGNORECASE,
 )
+_EXPLICIT_TRIP_DESTINATION = re.compile(
+    r"\b(?:plan\s+(?:a\s+)?trip\s+to|"
+    r"(?:i\s+)?(?:want|would\s+like)\s+to\s+(?:visit|travel\s+to|go\s+to)|"
+    r"(?:i\s+)?(?:am\s+)?(?:planning|plan)\s+(?:a\s+)?trip\s+to)\s+"
+    r"(.+?)(?=[.!?\n]|$)",
+    re.IGNORECASE,
+)
+
+
+def _extract_explicit_trip_destination(message: str) -> str | None:
+    match = _EXPLICIT_TRIP_DESTINATION.search(message or "")
+    return _clean_location_text(match.group(1)) if match else None
 
 
 def _strip_destination_option_label(value: str | None) -> str | None:
@@ -72,6 +84,14 @@ def _clean_location_text(value: str | None) -> str | None:
     if not value:
         return value
     value = re.sub(r"\s+", " ", value).strip(" ,.!?;:")
+    # Models occasionally include the action phrase in the destination slot.
+    value = re.sub(
+        r"^(?:(?:i\s+)?(?:want|would\s+like)\s+to\s+)?"
+        r"(?:visit|travel\s+to|go\s+to)\s+",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip(" ,.!?;:")
     value = re.sub(
         r"\s+(?:during|for|on|while)\s+(?:my|our|this|the)\s+"
         r"(?:trip|travel|vacation|holiday)\b.*$",
@@ -1165,7 +1185,8 @@ class TravelAgentGraph:
             current.transport_destination = None
             current.hotel_destination = None
 
-        is_new_trip = transport_search_request or bool(bare_transport_search) or bool(re.search(
+        explicit_trip_destination = _extract_explicit_trip_destination(message)
+        is_new_trip = transport_search_request or bool(bare_transport_search) or bool(explicit_trip_destination) or bool(re.search(
             r"\b(?:new|another|different)\s+trip\b",
             message,
             re.IGNORECASE,
@@ -1195,6 +1216,12 @@ class TravelAgentGraph:
             pending_destination_reply
             or _extract_destination_correction(message)
         )
+        if explicit_trip_destination and not pending_destination_reply:
+            current.destination = explicit_trip_destination
+            current.original_destination = explicit_trip_destination
+            current.transport_destination = explicit_trip_destination
+            if current.hotel_destination:
+                current.hotel_destination = explicit_trip_destination
         if destination_correction:
             current.destination = destination_correction
             current.original_destination = (
@@ -1933,6 +1960,9 @@ class TravelAgentGraph:
         explicit_destination_correction = bool(
             _extract_destination_correction(state.get("user_message", ""))
         )
+        explicit_new_trip = bool(
+            _extract_explicit_trip_destination(state.get("user_message", ""))
+        )
         if explicit_destination_correction:
             pending_clarification = _pending_after_destination_correction(
                 pending_clarification
@@ -1968,6 +1998,7 @@ class TravelAgentGraph:
             and pending_destination
             and destination
             and not explicit_destination_correction
+            and not explicit_new_trip
             and not re.search(r"\bfrom\s+.+?\s+to\s+", state.get("user_message", ""), re.IGNORECASE)
             and not re.search(r"\bhotels?\s+(?:in|at)\s+", state.get("user_message", ""), re.IGNORECASE)
         ):
