@@ -1,4 +1,5 @@
 import time
+import logging
 from functools import wraps
 
 import requests
@@ -70,15 +71,26 @@ def retry(
             while True:
 
                 try:
+                    started = time.perf_counter()
+                    outcome = "success"
                     return func(*args, **kwargs)
 
                 except Exception as exc:
+                    outcome = "retryable_failure" if is_retryable_exception(exc) else "failure"
 
                     if not is_retryable_exception(exc):
                         raise
 
                     if attempt >= max_attempts:
                         raise
+
+                finally:
+                    from app.core.request_context import get_request_id
+                    logging.getLogger(__name__).info(
+                        "Operation duration request_id=%s operation=ResolverToolAttempt name=%s attempt=%d outcome=%s elapsed_ms=%.2f",
+                        get_request_id() or "unavailable", func.__name__, attempt, outcome,
+                        (time.perf_counter()-started)*1000,
+                    )
 
                     time.sleep(current_delay)
 

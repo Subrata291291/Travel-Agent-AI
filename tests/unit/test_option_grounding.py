@@ -222,6 +222,31 @@ def test_confirmed_transport_booking_total_uses_authoritative_price(test_db):
     assert "Total: 26000.0 INR" in result["messages"][0].content
 
 
+def test_eur_supplier_price_and_currency_are_preserved_in_booking_record(test_db):
+    test_db.add(Tenant(tenant_id="tenant_demo", name="Demo", slug="demo"))
+    test_db.commit()
+
+    graph = TravelAgentGraph.__new__(TravelAgentGraph)
+    option = {**_flight_option(), "price": 65.61, "currency": "EUR", "travellers": 5}
+    state = {
+        "pending_booking_confirmation": True,
+        "perception": TripPerception(
+            intent="book_trip", selected_option_id="FLIGHT-1", confirmation="yes", travellers=5,
+        ),
+        "selected_option_id": "FLIGHT-1", "transport_options": [option],
+        "user_id": "user_demo", "tenant_id": "tenant_demo",
+        "session_id": "eur-booking-preservation",
+    }
+    result = graph.booking_execution_node(
+        state, SimpleNamespace(context=GraphContext(db=test_db))
+    )
+
+    assert result["booking"]["price"] == 65.61
+    assert result["booking"]["currency"] == "EUR"
+    assert result["booking"]["travellers"] == 5
+    assert result["booking"]["total_price"] == 328.05
+
+
 def test_hotel_supplier_offer_id_selects_canonical_option():
     graph = TravelAgentGraph.__new__(TravelAgentGraph)
     result = graph.hotel_booking_confirmation_node({

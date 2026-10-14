@@ -46,6 +46,15 @@ class FakeExtractionRouter:
         }
 
 
+class MultiPreferenceExtractionRouter:
+    def invoke_structured(self, _prompt, _schema):
+        return {"memories": [
+            {"text": "Prefers travelling by train", "topic": "general", "source_quote": "I prefer travelling by train", "kind": "semantic", "importance": .8, "confidence": .9},
+            {"text": "Is vegetarian", "topic": "general", "source_quote": "I am vegetarian", "kind": "semantic", "importance": .8, "confidence": .9},
+            {"text": "Prefers budget hotels", "topic": "general", "source_quote": "I prefer budget hotels", "kind": "semantic", "importance": .8, "confidence": .9},
+        ]}
+
+
 def test_authenticated_chat_persists_preference_vector_and_messages(test_db, monkeypatch, caplog):
     caplog.set_level("INFO", logger=chat_module.__name__)
     test_db.add(Tenant(tenant_id="tenant-a", name="Test", slug="tenant-a", status="active"))
@@ -346,3 +355,45 @@ def test_authenticated_chat_can_recall_saved_preference_on_followup(test_db, mon
     assert second.json()["answer"] == (
         "Your saved travel preferences: Prefers travelling by train."
     )
+
+
+def test_authenticated_chat_extracts_and_recalls_multiple_categories_in_new_session(test_db, monkeypatch):
+    test_db.add(Tenant(tenant_id="tenant-a", name="Test", slug="tenant-a", status="active"))
+    test_db.add(User(user_id="user-a", tenant_id="tenant-a", email="traveler@example.test", name="Traveler", role="user", status="active"))
+    test_db.commit()
+    agent = TravelAgentGraph()
+    agent.memory.preferences = LongTermMemory(MultiPreferenceExtractionRouter(), MemoryVectorIndex(FakeEmbedder()))
+    class FakePerception:
+        calls = 0
+        def understand(self, *_args):
+            self.calls += 1
+            return TripPerception(intent="other")
+    class FakePlanner:
+        def create_plan(self, *_args):
+            return TravelPlan(goal="Acknowledge", tasks=[])
+    class FakeChatRouter:
+        def invoke_with_tools(self, *_args):
+            return AIMessage(content="Preference noted.")
+    perception = FakePerception()
+    agent.perception_agent = perception
+    agent.planner_agent = FakePlanner()
+    agent.router = FakeChatRouter()
+    monkeypatch.setattr(chat_module, "travel_agent_graph", agent)
+    app = FastAPI()
+    app.include_router(chat_module.router, prefix="/api/v1")
+    def override_db():
+        yield test_db
+    app.dependency_overrides[get_db] = override_db
+    headers = {"Authorization": f"Bearer {create_access_token('user-a', 'tenant-a')}"}
+    try:
+        client = TestClient(app)
+        saved = client.post("/api/v1/chat", json={"message": "I prefer travelling by train. I am vegetarian. I prefer budget hotels.", "session_id": "save-prefs"}, headers=headers)
+        assert saved.status_code == 200, saved.text
+        recalled = client.post("/api/v1/chat", json={"message": "List every saved preference", "session_id": "new-recall-session"}, headers=headers)
+    finally:
+        app.dependency_overrides.clear()
+    assert recalled.status_code == 200, recalled.text
+    assert perception.calls == 1
+    assert "Prefers travelling by train" in recalled.json()["answer"]
+    assert "Is vegetarian" in recalled.json()["answer"]
+    assert "Prefers budget hotels" in recalled.json()["answer"]

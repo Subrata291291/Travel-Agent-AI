@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+from time import perf_counter
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -49,6 +50,14 @@ class GoogleMemoryEmbedder:
         )
 
     def embed(self, text: str) -> list[float]:
+        started = perf_counter()
+        from app.core.request_context import get_request_id
+        try:
+            return self._embed(text)
+        finally:
+            logger.info("Operation duration request_id=%s operation=EmbeddingGeneration provider=google model=%s outcome=completed elapsed_ms=%.2f", get_request_id() or "unavailable", self.model, (perf_counter()-started)*1000)
+
+    def _embed(self, text: str) -> list[float]:
         from google.genai import types
 
         response = self.client.models.embed_content(
@@ -126,8 +135,11 @@ class MemoryVectorIndex:
             db.delete(vector)
 
     def semantic_scores(self, db: Session, user_id: str, tenant_id: str, query: str) -> dict[str, float]:
+        started = perf_counter()
+        from app.core.request_context import get_request_id
         embedder = self.embedder
         if embedder is None or not query.strip():
+            logger.info("Operation duration request_id=%s operation=EmbeddingRetrieval outcome=skipped elapsed_ms=%.2f", get_request_id() or "unavailable", (perf_counter()-started)*1000)
             return {}
         try:
             query_vector = embedder.embed(query)
@@ -164,4 +176,6 @@ class MemoryVectorIndex:
             # Do not log the prompt, embedding values, API key, or provider response.
             logger.warning("Memory vector retrieval unavailable (%s)", type(error).__name__)
             return {}
+        finally:
+            logger.info("Operation duration request_id=%s operation=EmbeddingRetrieval outcome=completed elapsed_ms=%.2f", get_request_id() or "unavailable", (perf_counter()-started)*1000)
 

@@ -4,13 +4,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import re
+from time import perf_counter
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database.models import UserMemory
+from app.database.models import UserMemory, UserMemoryEmbedding
 from app.memory.vector_index import MemoryVectorIndex
 from app.core.request_context import get_request_id
 
@@ -73,6 +74,26 @@ _MEMORY_RECALL_CUES = re.compile(
     r"\bwhat do you remember about me\b",
     re.I,
 )
+_RECALL_ALL_CUES = re.compile(r"\b(?:all|every|each)\b.{0,40}\b(?:saved|stored)\b.{0,30}\b(?:preference|memory|memories)\b|\b(?:all|every)\s+(?:my\s+)?(?:saved\s+)?preferences\b", re.I)
+MAX_RECALL_RECORDS = 500
+
+
+def is_explicit_memory_recall(query: str) -> bool:
+    return bool(_MEMORY_RECALL_CUES.search(query or ""))
+
+
+def _normalized_topic(candidate: MemoryCandidate) -> str:
+    """Derive a conflict category from evidenced preference terms."""
+    evidence = (candidate.text + " " + candidate.source_quote).casefold()
+    categories = (
+        ("transport", r"\b(train|rail|flight|fly|air|bus|coach)\w*\b"),
+        ("diet", r"\b(vegetarian|vegan|food|diet|meal)\w*\b"),
+        ("accommodation", r"\b(hotel|hostel|lodging|accommodation|resort)\w*\b"),
+        ("seating", r"\b(window|aisle|seat|seating)\w*\b"),
+        ("accessibility", r"\b(accessib|wheelchair|mobility|step.free)\w*\b"),
+    )
+    matched = [name for name, pattern in categories if re.search(pattern, evidence)]
+    return matched[0] if len(matched) == 1 else candidate.topic.strip().lower()
 
 
 def contains_sensitive_information(value: str) -> bool:
@@ -174,12 +195,13 @@ class LongTermMemory:
     def retrieve(self, db: Session, user_id: str, tenant_id: str, query: str, limit: int = 5):
         active = db.scalars(self._owned_query(db, user_id, tenant_id).where(
             UserMemory.status == "active"
-        ).order_by(UserMemory.importance.desc(), UserMemory.updated_at.desc()).limit(500)).all()
+        ).order_by(UserMemory.importance.desc(), UserMemory.updated_at.desc()).limit(MAX_RECALL_RECORDS)).all()
         memories = list(active)
         # A direct question about what is saved asks for the user's saved
         # records, not a similarity match against words like "saved".
-        if _MEMORY_RECALL_CUES.search(query):
-            return [(memory, float(memory.importance)) for memory in memories[:max(0, limit)]]
+        if is_explicit_memory_recall(query):
+            requested_limit = MAX_RECALL_RECORDS if _RECALL_ALL_CUES.search(query) else max(0, limit)
+            return [(memory, float(memory.importance)) for memory in memories[:requested_limit]]
         semantic_scores = self.vector_index.semantic_scores(db, user_id, tenant_id, query)
         return rank_memories(query, memories, limit, semantic_scores)
 
@@ -190,7 +212,7 @@ class LongTermMemory:
         active = db.scalars(self._owned_query(db, user_id, tenant_id).where(
             UserMemory.status == "active"
         )).all()
-        topic = candidate.topic.strip().lower()
+        topic = _normalized_topic(candidate)
         existing = next((item for item in active if item.topic.strip().lower() == topic), None)
         now = datetime.now(timezone.utc)
         if existing:
@@ -242,6 +264,7 @@ class LongTermMemory:
         return len(memories)
 
     def extract_and_store(self, db: Session, user_id: str, tenant_id: str, message: str) -> int:
+        started = perf_counter()
         # Skip ordinary requests, transient trip details, and small talk without paying for an LLM call.
         if (
             not self.llm_router
@@ -249,6 +272,7 @@ class LongTermMemory:
             or _TEMPORARY_CUES.search(message)
             or _SENSITIVE_RE.search(message)
         ):
+            logger.info("Memory write outcome request_id=%s operation=MemoryExtraction extracted=0 accepted=0 rejected=0 persisted=0 embedding=skipped save=not_saved elapsed_ms=%.2f", get_request_id() or "unavailable", (perf_counter()-started)*1000)
             return 0
         prompt = (
             "Extract at most five explicit, stable travel preferences from this single user message. "
@@ -275,8 +299,11 @@ class LongTermMemory:
                 get_request_id() or "unavailable",
                 category,
             )
+            logger.info("Memory write outcome request_id=%s operation=MemoryExtraction extracted=0 accepted=0 rejected=0 persisted=0 embedding=skipped save=not_saved elapsed_ms=%.2f", get_request_id() or "unavailable", (perf_counter()-started)*1000)
             return 0
         stored = 0
+        rejected = 0
+        embedding = "not_attempted"
         for candidate in parsed.memories:
             if (
                 candidate.source_quote not in message
@@ -285,11 +312,16 @@ class LongTermMemory:
                 or _SENSITIVE_RE.search(candidate.text)
                 or not _supported_by_quote(candidate)
             ):
+                rejected += 1
+                logger.info("Memory candidate rejected request_id=%s operation=MemoryExtraction reason=unsupported_or_unsafe", get_request_id() or "unavailable")
                 continue
             try:
-                self.upsert(db, user_id, tenant_id, candidate)
+                candidate = candidate.model_copy(update={"topic": _normalized_topic(candidate)})
+                memory = self.upsert(db, user_id, tenant_id, candidate)
                 stored += 1
+                embedding = "indexed" if db.get(UserMemoryEmbedding, memory.memory_id) else "deferred"
             except (ValueError, ValidationError):
+                rejected += 1
                 continue
             except Exception as error:
                 db.rollback()
@@ -304,4 +336,5 @@ class LongTermMemory:
                     get_request_id() or "unavailable",
                     category,
                 )
+        logger.info("Memory write outcome request_id=%s operation=MemoryPersistence extracted=%d accepted=%d rejected=%d persisted=%d embedding=%s save=%s elapsed_ms=%.2f", get_request_id() or "unavailable", len(parsed.memories), stored + rejected, rejected, stored, embedding, "saved" if stored else "not_saved", (perf_counter()-started)*1000)
         return stored

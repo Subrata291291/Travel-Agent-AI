@@ -2,7 +2,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config.settings import settings
@@ -75,6 +75,24 @@ engine = create_engine(
     connect_args=connect_args,
     future=True,
 )
+
+
+@event.listens_for(engine, "before_cursor_execute")
+def _start_db_operation(_conn, _cursor, _statement, _parameters, context, _many):
+    from time import perf_counter
+    context._travel_db_started = perf_counter()
+
+
+@event.listens_for(engine, "after_cursor_execute")
+def _finish_db_operation(_conn, _cursor, _statement, _parameters, context, _many):
+    import logging
+    from app.core.request_context import get_request_id
+    started = getattr(context, "_travel_db_started", None)
+    if started is not None:
+        logging.getLogger(__name__).info(
+            "Operation duration request_id=%s operation=DatabaseOperation outcome=success elapsed_ms=%.2f",
+            get_request_id() or "unavailable", (__import__("time").perf_counter()-started)*1000,
+        )
 
 
 # ============================================================

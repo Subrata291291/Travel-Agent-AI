@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 import logging
+from time import perf_counter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from uuid import uuid4
@@ -104,6 +105,7 @@ def chat(
     request_id = str(uuid4())
     response.headers["X-Request-ID"] = request_id
     request_token = set_request_id(request_id)
+    request_started = perf_counter()
     try:
         result = travel_agent_graph.run(
             user_message=request.message,
@@ -124,6 +126,7 @@ def chat(
             headers={"X-Request-ID": request_id},
         ) from None
     finally:
+        logger.info("Request duration request_id=%s operation=ChatRequest outcome=completed elapsed_ms=%.2f", request_id, (perf_counter()-request_started)*1000)
         reset_request_id(request_token)
 
     booking = result.get("booking")

@@ -4,6 +4,8 @@ from typing import Annotated, TypedDict
 import json
 import re
 import inspect
+import logging
+from time import perf_counter
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +30,7 @@ from app.agents.executor import ToolExecutor
 from app.llm.router import LLMRouter
 
 from app.memory.conversation import ConversationMemory
+from app.memory.long_term import is_explicit_memory_recall
 
 from app.tools import get_all_tools
 from app.tools.destination_resolver import DestinationResolver
@@ -64,6 +67,7 @@ _EXPLICIT_TRIP_DESTINATION = re.compile(
     r"(.+?)(?=[.!?\n]|$)",
     re.IGNORECASE,
 )
+logger = logging.getLogger(__name__)
 
 
 def _extract_explicit_trip_destination(message: str) -> str | None:
@@ -734,9 +738,10 @@ class TravelAgentGraph:
         # START → PERCEPTION
         # ----------------------------------------------------
 
-        graph.add_edge(
+        graph.add_conditional_edges(
             START,
-            "perception",
+            lambda state: "memory_recall" if is_explicit_memory_recall(state.get("user_message", "")) else "perception",
+            {"memory_recall": "memory_recall", "perception": "perception"},
         )
 
         # ----------------------------------------------------
@@ -2385,7 +2390,7 @@ class TravelAgentGraph:
                 state["user_id"],
                 state["tenant_id"],
                 state["user_message"],
-                limit=5,
+                limit=500 if re.search(r"\b(all|every|each)\b", state["user_message"], re.I) else 5,
             )
         saved = [memory.text for memory, _score in preferences]
         if saved:
@@ -6015,10 +6020,16 @@ unsupported information.
         # Execute graph
         # ----------------------------------------------------
 
-        result = self.graph.invoke(
-            initial_state,
-            context=GraphContext(db=db),
-        )
+        graph_started = perf_counter()
+        try:
+            result = self.graph.invoke(initial_state, context=GraphContext(db=db))
+            graph_outcome = "success"
+        except Exception:
+            graph_outcome = "failure"
+            raise
+        finally:
+            from app.core.request_context import get_request_id
+            logger.info("Operation duration request_id=%s operation=GraphExecution outcome=%s elapsed_ms=%.2f", get_request_id() or "unavailable", graph_outcome, (perf_counter()-graph_started)*1000)
 
         def state_value(
             key: str,

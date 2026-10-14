@@ -64,6 +64,29 @@ def test_update_supersedes_previous_and_delete_excludes_memory(test_db):
     assert not service.delete(test_db, "user-b", "tenant-a", new.memory_id)
 
 
+def test_same_transport_topic_supersedes_without_removing_other_categories(test_db):
+    _owner(test_db)
+    service = LongTermMemory()
+    old = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer flights", "general"))
+    diet = service.upsert(test_db, "u", "tenant-a", _candidate("I am vegetarian", "general"))
+    hotel = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer budget hotels", "general"))
+    new = service.upsert(test_db, "u", "tenant-a", _candidate("I prefer trains", "general"))
+    assert test_db.get(UserMemory, old.memory_id).status == "superseded"
+    assert {item.topic for item in service.list(test_db, "u", "tenant-a")} == {"transport", "diet", "accommodation"}
+    assert {item.memory_id for item in service.list(test_db, "u", "tenant-a")} == {diet.memory_id, hotel.memory_id, new.memory_id}
+
+
+def test_explicit_recall_all_returns_more_than_default_five(test_db):
+    _owner(test_db)
+    service = LongTermMemory()
+    for index in range(8):
+        service.upsert(test_db, "u", "tenant-a", _candidate(f"I prefer option {index}", f"custom-{index}"))
+    all_saved = service.retrieve(test_db, "u", "tenant-a", "List every saved preference")
+    normal = service.retrieve(test_db, "u", "tenant-a", "What saved preferences do I have?")
+    assert len(all_saved) == 8
+    assert len(normal) == 5
+
+
 def test_ranking_relevance_dominates_trivial_recency(test_db):
     now = datetime.now(timezone.utc)
     old_relevant = UserMemory(

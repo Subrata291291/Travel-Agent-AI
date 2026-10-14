@@ -6,6 +6,7 @@ import {
 
 import { sendChatMessage } from "../services/chatService";
 import { createNewSessionId, getOrCreateSessionId } from "../services/chatSession";
+import { parseCurrencyPriceLine } from "../utils/currency.js";
 import {
   acquireSubmissionLock,
   insertAssistantResponse,
@@ -538,6 +539,7 @@ function MessageText({
   content,
   isUser,
 }) {
+  const lines = String(content || "").split("\n");
   return (
     <div
       className={
@@ -546,7 +548,20 @@ function MessageText({
           : "whitespace-pre-wrap"
       }
     >
-      {content}
+      {lines.map((line, index) => {
+        const priceLine = !isUser && parseCurrencyPriceLine(line);
+        if (!priceLine) {
+          return <span key={index}>{line}{index < lines.length - 1 ? "\n" : ""}</span>;
+        }
+
+        return (
+          <span key={index}>
+            {priceLine.label}
+            <InrPrice amount={priceLine.amount} currency={priceLine.currency} />
+            {index < lines.length - 1 ? "\n" : ""}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -569,6 +584,10 @@ function AgentResult({
   const booking =
     data.booking;
 
+  const selectedTransportOption = transportOptions.find(
+    (option) => option.option_id === data.selected_option_id,
+  );
+
   return (
     <div className="mt-3 space-y-3">
 
@@ -576,7 +595,9 @@ function AgentResult({
           TRANSPORT OPTIONS
       =================================================== */}
 
-      {transportOptions.length > 0 && (
+      {data.pending_booking_confirmation && selectedTransportOption ? (
+        <TransportConfirmationPrice option={selectedTransportOption} />
+      ) : transportOptions.length > 0 && (
         <div>
 
           <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -646,6 +667,34 @@ function AgentResult({
         />
       )}
 
+    </div>
+  );
+}
+
+function TransportConfirmationPrice({ option }) {
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
+      <p className="font-semibold text-slate-900">Price summary</p>
+      <div className="mt-3 flex items-start justify-between gap-4">
+        <span className="text-slate-600">Price per traveller</span>
+        <InrPrice
+          amount={option.price}
+          currency={option.currency}
+          className="text-right font-semibold text-slate-900"
+        />
+      </div>
+      {option.total_price != null && (
+        <div className="mt-3 flex items-start justify-between gap-4 border-t border-amber-200 pt-3">
+          <span className="text-slate-600">
+            Total for {option.travellers || 1} travellers
+          </span>
+          <InrPrice
+            amount={option.total_price}
+            currency={option.currency}
+            className="text-right font-bold text-slate-900"
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -975,6 +1024,27 @@ function BookingResult({
             </p>
           )}
 
+          {!isCancelled && booking.mode && (
+            <div className="mt-4 space-y-3 border-t border-amber-200 pt-3 text-sm">
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-slate-600">Price per traveller</span>
+                <InrPrice
+                  amount={booking.price}
+                  currency={booking.currency}
+                  className="text-right font-semibold text-slate-900"
+                />
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-slate-600">Total price</span>
+                <InrPrice
+                  amount={booking.total_price}
+                  currency={booking.currency}
+                  className="text-right font-bold text-slate-900"
+                />
+              </div>
+            </div>
+          )}
+
         </div>
 
       </div>
@@ -1046,6 +1116,15 @@ function assistantDisplayContent(message) {
       return message.content;
     }
     return "I saved the booking record. The card below shows its app status; this chat has not completed a supplier reservation or customer payment.";
+  }
+
+  if (
+    data.pending_booking_confirmation
+    && data.transport_options?.some(
+      (option) => option.option_id === data.selected_option_id,
+    )
+  ) {
+    return "Review the price summary below. Would you like me to save this booking?";
   }
 
   const hotels = data.hotel_options || [];

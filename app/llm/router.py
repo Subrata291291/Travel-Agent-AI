@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 import re
 from uuid import uuid4
 
@@ -425,6 +426,7 @@ class LLMRouter:
         correlation_id = get_request_id() or str(uuid4())
 
         for provider_name in self.provider_order:
+            attempt_started = perf_counter()
             try:
                 # Create the current provider.
                 llm = self.get_llm(provider_name)
@@ -446,22 +448,24 @@ class LLMRouter:
                     validated_response = schema.model_validate(response)
 
                 logger.info(
-                    "Structured provider succeeded operation=%s provider=%s model=%s request_id=%s",
-                    operation,
+                    "LLM attempt request_id=%s operation=%s provider=%s model=%s attempt=%d outcome=success elapsed_ms=%.2f",
+                    correlation_id, operation,
                     provider_name,
                     self._configured_model(provider_name),
-                    correlation_id,
+                    self.provider_order.index(provider_name) + 1,
+                    (perf_counter()-attempt_started)*1000,
                 )
 
                 return validated_response
 
             except LLMConfigurationError as error:
                 logger.warning(
-                    "Structured provider failed operation=%s provider=%s model=%s request_id=%s category=configuration provider_error_type=%s",
-                    operation,
+                    "LLM attempt request_id=%s operation=%s provider=%s model=%s attempt=%d outcome=configuration_failure elapsed_ms=%.2f provider_error_type=%s",
+                    correlation_id, operation,
                     provider_name,
                     self._configured_model(provider_name),
-                    correlation_id,
+                    self.provider_order.index(provider_name) + 1,
+                    (perf_counter()-attempt_started)*1000,
                     self._safe_identifier(type(error).__name__),
                 )
 
@@ -469,11 +473,12 @@ class LLMRouter:
 
             except Exception as error:
                 logger.warning(
-                    "Structured provider failed operation=%s provider=%s model=%s request_id=%s category=%s metadata=%s",
-                    operation,
+                    "LLM attempt request_id=%s operation=%s provider=%s model=%s attempt=%d outcome=failure elapsed_ms=%.2f category=%s metadata=%s",
+                    correlation_id, operation,
                     provider_name,
                     self._configured_model(provider_name),
-                    correlation_id,
+                    self.provider_order.index(provider_name) + 1,
+                    (perf_counter()-attempt_started)*1000,
                     self._exception_category(error),
                     self._failure_metadata(error),
                 )
