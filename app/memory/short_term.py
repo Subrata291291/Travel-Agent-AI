@@ -1,9 +1,13 @@
 from typing import Dict, List
 import hashlib
+import logging
 
 from sqlalchemy import select
 
 from app.database.models import ConversationMessage
+from app.core.request_context import get_request_id
+
+logger = logging.getLogger(__name__)
 
 
 class ShortTermMemory:
@@ -84,17 +88,32 @@ class ShortTermMemory:
 
         if db is not None:
             if not user_id:
-                return []
-            rows = db.scalars(
-                select(ConversationMessage)
-                .where(
-                    ConversationMessage.tenant_id == tenant_id,
-                    ConversationMessage.user_id == user_id,
-                    ConversationMessage.session_key == self._persistent_session_key(session_id, user_id),
+                logger.info(
+                    "Session history retrieval request_id=%s operation=ConversationHistory outcome=skipped_missing_identity message_count=0",
+                    get_request_id() or "unavailable",
                 )
-                .order_by(ConversationMessage.message_id.desc())
-                .limit(100)
-            ).all()
+                return []
+            try:
+                rows = db.scalars(
+                    select(ConversationMessage)
+                    .where(
+                        ConversationMessage.tenant_id == tenant_id,
+                        ConversationMessage.user_id == user_id,
+                        ConversationMessage.session_key == self._persistent_session_key(session_id, user_id),
+                    )
+                    .order_by(ConversationMessage.message_id.desc())
+                    .limit(100)
+                ).all()
+            except Exception as error:
+                logger.warning(
+                    "Session history retrieval request_id=%s operation=ConversationHistory outcome=failure error_type=%s",
+                    get_request_id() or "unavailable", type(error).__name__,
+                )
+                raise
+            logger.info(
+                "Session history retrieval request_id=%s operation=ConversationHistory outcome=success scope=authenticated_session message_count=%d",
+                get_request_id() or "unavailable", len(rows),
+            )
             return [
                 {"role": item.role, "content": item.content}
                 for item in reversed(rows)

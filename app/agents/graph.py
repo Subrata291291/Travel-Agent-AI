@@ -72,7 +72,11 @@ _EXPLICIT_TRIP_ACTION = re.compile(r"\b(?:plan|search|find|book|reserve|compare|
 _GENERAL_GREETING = re.compile(r"\s*(?:hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you|okay|ok|nice to meet you)[!.?\s]*\s*", re.I)
 _NAME_STATEMENT = re.compile(r"\s*my name is\s+([\w'-]+)[.!?\s]*$", re.I)
 _NAME_QUESTION = re.compile(r"\s*(?:what|wh?t|whst|who)\s+is\s+my\s+name(?:\s+again)?[?!.,\s]*$", re.I)
-_GENERAL_QUESTION = re.compile(r"^\s*(?:what\s+is|who\s+is|why\b|how\s+does|define\b|explain\b)", re.I)
+_GENERAL_QUESTION = re.compile(
+    r"^\s*(?:what\s+(?:is|was|were|did|have)|who\s+is|why\b|how\s+does|"
+    r"when\s+(?:was|did)|where\s+did|define\b|explain\b)",
+    re.I,
+)
 _EXPLICIT_TRAVEL_REQUEST = re.compile(
     r"\b(?:plan|search|find|look\s+for|book|reserve|compare|show\s+options|"
     r"recommend|suggest)\b.{0,60}\b(?:trip|travel|flight|train|bus|hotel|"
@@ -2463,8 +2467,8 @@ class TravelAgentGraph:
             state["session_id"], state["tenant_id"], state["user_id"], **history_kwargs
         )
         messages = [
-            ("system", "You are a friendly assistant. Answer ordinary conversation and questions naturally. Use only facts the user shared in this conversation when asked about them; do not invent personal facts or claim that information was saved permanently. Do not start trip planning unless the user explicitly requests it."),
-            *[("human" if item.get("role") == "human" else "assistant", item.get("content", "")) for item in history[-40:]],
+            ("system", "You are a friendly assistant. Answer ordinary conversation and questions naturally. Use only facts present in the supplied conversation history when asked about them; do not invent personal facts or claim that information was saved permanently. Treat earlier user requests and assistant search or booking results as conversation facts. When asked about a previous route, option, or date, check all supplied turns before answering. Do not say there is no record unless the supplied history has no supporting details. Do not start trip planning unless the user explicitly requests it."),
+            *[("human" if item.get("role") == "human" else "assistant", item.get("content", "")) for item in history],
         ]
         started = perf_counter()
         response = self.router.invoke(messages)
@@ -2472,7 +2476,7 @@ class TravelAgentGraph:
         from app.core.request_context import get_request_id
         logger.info(
             "Operation duration request_id=%s operation=GeneralConversation outcome=success elapsed_ms=%.2f history_messages=%d",
-            get_request_id() or "unavailable", (perf_counter() - started) * 1000, len(history[-40:]),
+            get_request_id() or "unavailable", (perf_counter() - started) * 1000, len(history),
         )
         return {"messages": [AIMessage(content=answer)], "answer": answer}
 
